@@ -1,0 +1,3252 @@
+// ==========================================
+// CONFIGURACIÓN GLOBAL
+// ==========================================
+let currentFlight = {};
+let map = null;
+let rutaActual = null;
+let marcadorOrigen = null;
+let marcadorDestino = null;
+let marcadorAvion = null;
+let intervaloAnimacion = null;
+let indiceAnimacion = 0;
+let puntosRuta = [];
+const WEATHER_LOOKBACK_DAYS = 2;
+let audioContext = null;
+let activeOscillators = [];
+let activeGainNodes = [];
+let cabinInterval = null;
+let noiseNodes = [];
+let currentRouteGame = null;
+let currentQuizGame = null;
+let currentAirportGame = null;
+let currentDistanceGame = null;
+let plannerCalendarView = new Date(new Date().getFullYear(), new Date().getMonth(), 1);
+let speedMultiplier = 1; // 1 = tiempo real, 2 = 2x velocidad, etc.
+let tripExpenses = []; // Array de gastos del viaje
+let expensesChart = null; // Instancia del gráfico
+const weatherDetailCache = new Map();
+const checklistIds = [
+    "taskBaggageReady",
+    "taskCheckinDone",
+    "taskBoardingScan",
+    "taskSeatAssigned",
+    "taskGateAssigned",
+    "taskGroupAssigned",
+    "taskCheckedBag",
+    "taskDocsReady"
+];
+
+const DEFAULT_PACKING_ITEMS = [
+  { id: "packingDocsPassport", label: "Documentos y pasaporte", checked: false },
+  { id: "packingChargers", label: "Cargadores y adaptadores", checked: false },
+  { id: "packingMedications", label: "Medicamentos básicos", checked: false },
+  { id: "packingClothing", label: "Ropa según clima (14°C)", checked: false },
+  { id: "packingUmbrella", label: "Paraguas (probabilidad lluvia: 60%)", checked: false }
+];
+
+const COUNTRY_TRAVEL_ALERTS = {
+  Italia: {
+    title: "Seguimiento operativo en Italia",
+    detail: "Puede haber huelgas sectoriales puntuales. Revisa el estado del vuelo 24h antes y vuelve a confirmar el aeropuerto.",
+    severity: "warning",
+    icon: "🚨"
+  }
+};
+
+function getDefaultPackingChecklist() {
+  return DEFAULT_PACKING_ITEMS.map(item => ({ ...item }));
+}
+
+function ensureFlightPackingList() {
+  if (!currentFlight.packingChecklist || !Array.isArray(currentFlight.packingChecklist)) {
+    currentFlight.packingChecklist = getDefaultPackingChecklist();
+  }
+  if (!currentFlight.conversionRate) {
+    currentFlight.conversionRate = 1;
+  }
+  if (!currentFlight.conversionUpdatedAt) {
+    currentFlight.conversionUpdatedAt = new Date().toISOString();
+  }
+}
+
+function upsertPackingChecklistItem(id, label, checked = false) {
+  ensureFlightPackingList();
+  const existing = currentFlight.packingChecklist.find(item => item.id === id);
+
+  if (existing) {
+    existing.label = label;
+    if (checked !== undefined) {
+      existing.checked = existing.checked || checked;
+    }
+    return;
+  }
+
+  currentFlight.packingChecklist.push({ id, label, checked });
+}
+
+function renderPackingChecklist() {
+  const container = document.getElementById("packingItemsList");
+  if (!container) return;
+  ensureFlightPackingList();
+
+  if (!currentFlight.packingChecklist.length) {
+    container.innerHTML = '<p class="packing-empty">No hay elementos en el checklist. Añade uno nuevo.</p>';
+    return;
+  }
+
+  container.innerHTML = currentFlight.packingChecklist.map((item, index) => `
+    <div class="packing-item">
+      <label>
+        <input type="checkbox" data-index="${index}" ${item.checked ? 'checked' : ''}>
+        <span>${item.label}</span>
+      </label>
+      <button type="button" class="packing-remove-button" data-index="${index}" aria-label="Eliminar ítem">✕</button>
+    </div>
+  `).join("");
+}
+
+function convertCelsiusToFahrenheit(value) {
+  return Math.round((value * 9) / 5 + 32);
+}
+
+function convertKmToMiles(km) {
+  return Number((km * 0.621371).toFixed(2));
+}
+
+function isItalyFlight() {
+  return [currentFlight.origin, currentFlight.destination].some(code => airportDatabase[code]?.pais === 'Italia');
+}
+
+function updateConversionSummary() {
+  const container = document.getElementById("conversionSummary");
+  if (!container) return;
+  ensureFlightPackingList();
+
+  const temperatureC = 14;
+  const temperatureF = convertCelsiusToFahrenheit(temperatureC);
+  const distance = currentFlight.distanceKm || 100;
+  const distanceLabel = `${distance} km`;
+  const milesLabel = `${convertKmToMiles(distance)} millas`;
+  const isItaly = isItalyFlight();
+
+  container.innerHTML = `
+    <p>${isItaly ? 'Conversor para Italia' : 'Conversor de referencia para vuelos a Italia.'}</p>
+    <ul>
+      <li>1 EUR = 1 EUR</li>
+      <li>100 EUR = 100 EUR</li>
+      <li>Temperatura: ${temperatureC}°C = ${temperatureF}°F</li>
+      <li>Distancia: ${distanceLabel} = ${milesLabel}</li>
+    </ul>
+    <small class="conversion-note">${isItaly ? 'Tasas actualizadas para vuelo italiano.' : 'Añade un vuelo con origen o destino en Italia para ver la conversión completa.'}</small>
+  `;
+
+  currentFlight.conversionUpdatedAt = new Date().toISOString();
+}
+
+function getSeatRecommendation() {
+  if (!currentFlight.aircraftName) {
+    return 'Para A320: 17A recomendado';
+  }
+
+  if (currentFlight.aircraftName.includes('A320')) {
+    return 'Para A320: 17A recomendado';
+  }
+
+  if (currentFlight.aircraftName.includes('Boeing 737')) {
+    return 'Para Boeing 737: 14A recomendado';
+  }
+
+  return 'Prefieres ventana y ala. Recomendado: 17A cuando sea posible.';
+}
+
+function updateSeatRecommendation() {
+  const seatText = document.getElementById('seatRecommendationText');
+  if (!seatText) return;
+  seatText.textContent = getSeatRecommendation();
+}
+
+function getPassportStamps() {
+  const history = JSON.parse(localStorage.getItem('flights')) || [];
+  return history.map(flight => ({
+    id: `${flight.flight}-${flight.flightDate || flight.date}-${flight.origin}-${flight.destination}`,
+    label: `${flight.origin} → ${flight.destination}`,
+    date: flight.flightDate || flight.date,
+    flight: flight.flight
+  }));
+}
+
+function renderPassportStamps() {
+  const container = document.getElementById('passportStampsList');
+  const countLabel = document.getElementById('passportStampCount');
+  if (!container || !countLabel) return;
+
+  const stamps = getPassportStamps();
+  countLabel.textContent = `${stamps.length} sello${stamps.length === 1 ? '' : 's'}`;
+
+  if (!stamps.length) {
+    container.innerHTML = '<p class="passport-empty">Aún no hay sellos. Guarda un vuelo para obtener tu pasaporte digital.</p>';
+    return;
+  }
+
+  container.innerHTML = stamps.slice(-8).reverse().map(stamp => `
+    <div class="passport-stamp" title="Vuelo ${stamp.flight}">
+      <span class="passport-stamp-route">${stamp.label}</span>
+      <span class="passport-stamp-date">${stamp.date}</span>
+      <span class="passport-stamp-flight">${stamp.flight}</span>
+    </div>
+  `).join('');
+}
+
+function updatePassportStamps() {
+  renderPassportStamps();
+}
+
+function togglePackingAddRow(show) {
+  const row = document.getElementById("packingAddRow");
+  if (!row) return;
+  row.style.display = show ? "flex" : "none";
+  if (show) {
+    const input = document.getElementById("newPackingItemInput");
+    if (input) input.focus();
+  }
+}
+
+function addPackingChecklistItem(label) {
+  if (!label || !label.trim()) return;
+  ensureFlightPackingList();
+  currentFlight.packingChecklist.push({
+    id: `packingExtra${Date.now()}`,
+    label: label.trim(),
+    checked: false
+  });
+  renderPackingChecklist();
+}
+
+function togglePackingChecklistItem(index, checked) {
+  if (!currentFlight.packingChecklist || !currentFlight.packingChecklist[index]) return;
+  currentFlight.packingChecklist[index].checked = checked;
+  renderPackingChecklist();
+}
+
+function removePackingChecklistItem(index) {
+  if (!currentFlight.packingChecklist || !currentFlight.packingChecklist[index]) return;
+  currentFlight.packingChecklist.splice(index, 1);
+  renderPackingChecklist();
+}
+
+function handlePackingListClick(event) {
+  const target = event.target;
+  if (!target) return;
+
+  if (target.matches('input[type="checkbox"]')) {
+    const index = Number(target.dataset.index);
+    togglePackingChecklistItem(index, target.checked);
+    return;
+  }
+
+  if (target.matches('.packing-remove-button')) {
+    const index = Number(target.dataset.index);
+    removePackingChecklistItem(index);
+  }
+}
+
+// ==========================================
+// BASE DE DATOS DE AEROPUERTOS (COORDENADAS REALES)
+// ==========================================
+const airportDatabase = {
+    // Europa
+    MAD: { lat: 40.4719, lng: -3.5626, nombre: 'Madrid-Barajas', ciudad: 'Madrid', pais: 'España' },
+    BCN: { lat: 41.2974, lng: 2.0833, nombre: 'Barcelona-El Prat', ciudad: 'Barcelona', pais: 'España' },
+    PMI: { lat: 39.5517, lng: 2.7388, nombre: 'Palma de Mallorca', ciudad: 'Palma', pais: 'España' },
+    AGP: { lat: 36.6749, lng: -4.4991, nombre: 'Málaga-Costa del Sol', ciudad: 'Málaga', pais: 'España' },
+    SVQ: { lat: 37.4180, lng: -5.8931, nombre: 'Sevilla', ciudad: 'Sevilla', pais: 'España' },
+    VLC: { lat: 39.4893, lng: -0.4816, nombre: 'Valencia', ciudad: 'Valencia', pais: 'España' },
+    BIO: { lat: 43.3011, lng: -2.9106, nombre: 'Bilbao', ciudad: 'Bilbao', pais: 'España' },
+    LIS: { lat: 38.7742, lng: -9.1342, nombre: 'Lisboa', ciudad: 'Lisboa', pais: 'Portugal' },
+    OPO: { lat: 41.2420, lng: -8.6780, nombre: 'Oporto', ciudad: 'Oporto', pais: 'Portugal' },
+    MXP: { lat: 45.6306, lng: 8.7281, nombre: 'Milán-Malpensa', ciudad: 'Milán', pais: 'Italia' },
+    LIN: { lat: 45.4497, lng: 9.2783, nombre: 'Milán-Linate', ciudad: 'Milán', pais: 'Italia' },
+    FCO: { lat: 41.8003, lng: 12.2389, nombre: 'Roma-Fiumicino', ciudad: 'Roma', pais: 'Italia' },
+    CIA: { lat: 41.7994, lng: 12.5949, nombre: 'Roma-Ciampino', ciudad: 'Roma', pais: 'Italia' },
+    TRN: { lat: 45.2008, lng: 7.6496, nombre: 'Turín-Caselle', ciudad: 'Turín', pais: 'Italia' },
+    NAP: { lat: 40.8860, lng: 14.2908, nombre: 'Nápoles', ciudad: 'Nápoles', pais: 'Italia' },
+    VCE: { lat: 45.5053, lng: 12.3519, nombre: 'Venecia Marco Polo', ciudad: 'Venecia', pais: 'Italia' },
+    CDG: { lat: 49.0097, lng: 2.5479, nombre: 'París-Charles de Gaulle', ciudad: 'París', pais: 'Francia' },
+    ORY: { lat: 48.7233, lng: 2.3794, nombre: 'París-Orly', ciudad: 'París', pais: 'Francia' },
+    NCE: { lat: 43.6653, lng: 7.2150, nombre: 'Niza-Costa Azul', ciudad: 'Niza', pais: 'Francia' },
+    MRS: { lat: 43.4393, lng: 5.2214, nombre: 'Marsella-Provenza', ciudad: 'Marsella', pais: 'Francia' },
+    LHR: { lat: 51.4700, lng: -0.4543, nombre: 'Londres-Heathrow', ciudad: 'Londres', pais: 'Reino Unido' },
+    STN: { lat: 51.8850, lng: 0.2350, nombre: 'Londres-Stansted', ciudad: 'Londres', pais: 'Reino Unido' },
+    LGW: { lat: 51.1537, lng: -0.1821, nombre: 'Londres-Gatwick', ciudad: 'Londres', pais: 'Reino Unido' },
+    MAN: { lat: 53.3650, lng: -2.2728, nombre: 'Manchester', ciudad: 'Manchester', pais: 'Reino Unido' },
+    EDI: { lat: 55.9500, lng: -3.3725, nombre: 'Edimburgo', ciudad: 'Edimburgo', pais: 'Reino Unido' },
+    BER: { lat: 52.3667, lng: 13.5033, nombre: 'Berlín-Brandeburgo', ciudad: 'Berlín', pais: 'Alemania' },
+    FRA: { lat: 50.0379, lng: 8.5622, nombre: 'Fráncfort', ciudad: 'Fráncfort', pais: 'Alemania' },
+    MUC: { lat: 48.3538, lng: 11.7861, nombre: 'Múnich', ciudad: 'Múnich', pais: 'Alemania' },
+    HAM: { lat: 53.6304, lng: 9.9882, nombre: 'Hamburgo', ciudad: 'Hamburgo', pais: 'Alemania' },
+    AMS: { lat: 52.3086, lng: 4.7639, nombre: 'Ámsterdam-Schiphol', ciudad: 'Ámsterdam', pais: 'Países Bajos' },
+    BRU: { lat: 50.9010, lng: 4.4844, nombre: 'Bruselas', ciudad: 'Bruselas', pais: 'Bélgica' },
+    ZRH: { lat: 47.4581, lng: 8.5555, nombre: 'Zúrich', ciudad: 'Zúrich', pais: 'Suiza' },
+    GVA: { lat: 46.2381, lng: 6.1089, nombre: 'Ginebra', ciudad: 'Ginebra', pais: 'Suiza' },
+    VIE: { lat: 48.1103, lng: 16.5697, nombre: 'Viena', ciudad: 'Viena', pais: 'Austria' },
+    ATH: { lat: 37.9364, lng: 23.9475, nombre: 'Atenas', ciudad: 'Atenas', pais: 'Grecia' },
+    DUB: { lat: 53.4213, lng: -6.2701, nombre: 'Dublín', ciudad: 'Dublín', pais: 'Irlanda' },
+    CPH: { lat: 55.6181, lng: 12.6561, nombre: 'Copenhague', ciudad: 'Copenhague', pais: 'Dinamarca' },
+    ARN: { lat: 59.6519, lng: 17.9186, nombre: 'Estocolmo-Arlanda', ciudad: 'Estocolmo', pais: 'Suecia' },
+    OSL: { lat: 60.1976, lng: 11.1004, nombre: 'Oslo-Gardermoen', ciudad: 'Oslo', pais: 'Noruega' },
+    HEL: { lat: 60.3172, lng: 24.9633, nombre: 'Helsinki', ciudad: 'Helsinki', pais: 'Finlandia' },
+    WAW: { lat: 52.1657, lng: 20.9671, nombre: 'Varsovia Chopin', ciudad: 'Varsovia', pais: 'Polonia' },
+    PRG: { lat: 50.1008, lng: 14.2600, nombre: 'Praga', ciudad: 'Praga', pais: 'Chequia' },
+    BUD: { lat: 47.4369, lng: 19.2556, nombre: 'Budapest', ciudad: 'Budapest', pais: 'Hungría' },
+    OTP: { lat: 44.5711, lng: 26.0850, nombre: 'Bucarest Henri Coandă', ciudad: 'Bucarest', pais: 'Rumanía' },
+    IST: { lat: 41.2753, lng: 28.7519, nombre: 'Estambul', ciudad: 'Estambul', pais: 'Turquía' },
+
+    // Norteamérica
+    JFK: { lat: 40.6413, lng: -73.7781, nombre: 'Nueva York-JFK', ciudad: 'Nueva York', pais: 'EEUU' },
+    LGA: { lat: 40.7769, lng: -73.8740, nombre: 'Nueva York-LaGuardia', ciudad: 'Nueva York', pais: 'EEUU' },
+    EWR: { lat: 40.6895, lng: -74.1745, nombre: 'Newark', ciudad: 'Newark', pais: 'EEUU' },
+    SFO: { lat: 37.6213, lng: -122.3790, nombre: 'San Francisco', ciudad: 'San Francisco', pais: 'EEUU' },
+    LAX: { lat: 33.9416, lng: -118.4085, nombre: 'Los Ángeles', ciudad: 'Los Ángeles', pais: 'EEUU' },
+    ORD: { lat: 41.9742, lng: -87.9073, nombre: 'Chicago O’Hare', ciudad: 'Chicago', pais: 'EEUU' },
+    BOS: { lat: 42.3656, lng: -71.0096, nombre: 'Boston Logan', ciudad: 'Boston', pais: 'EEUU' },
+    IAD: { lat: 38.9531, lng: -77.4565, nombre: 'Washington Dulles', ciudad: 'Washington', pais: 'EEUU' },
+    SEA: { lat: 47.4502, lng: -122.3088, nombre: 'Seattle-Tacoma', ciudad: 'Seattle', pais: 'EEUU' },
+    LAS: { lat: 36.0840, lng: -115.1537, nombre: 'Las Vegas Harry Reid', ciudad: 'Las Vegas', pais: 'EEUU' },
+    ATL: { lat: 33.6407, lng: -84.4277, nombre: 'Atlanta Hartsfield-Jackson', ciudad: 'Atlanta', pais: 'EEUU' },
+    DFW: { lat: 32.8998, lng: -97.0403, nombre: 'Dallas/Fort Worth', ciudad: 'Dallas', pais: 'EEUU' },
+    MCO: { lat: 28.4312, lng: -81.3081, nombre: 'Orlando', ciudad: 'Orlando', pais: 'EEUU' },
+    MIA: { lat: 25.7959, lng: -80.2870, nombre: 'Miami', ciudad: 'Miami', pais: 'EEUU' },
+    YYZ: { lat: 43.6777, lng: -79.6248, nombre: 'Toronto Pearson', ciudad: 'Toronto', pais: 'Canadá' },
+    YUL: { lat: 45.4706, lng: -73.7408, nombre: 'Montreal-Trudeau', ciudad: 'Montreal', pais: 'Canadá' },
+    YVR: { lat: 49.1967, lng: -123.1815, nombre: 'Vancouver', ciudad: 'Vancouver', pais: 'Canadá' },
+    MEX: { lat: 19.4361, lng: -99.0719, nombre: 'Ciudad de México', ciudad: 'Ciudad de México', pais: 'México' },
+    CUN: { lat: 21.0365, lng: -86.8771, nombre: 'Cancún', ciudad: 'Cancún', pais: 'México' },
+    GDL: { lat: 20.5218, lng: -103.3112, nombre: 'Guadalajara', ciudad: 'Guadalajara', pais: 'México' },
+    MTY: { lat: 25.7785, lng: -100.1070, nombre: 'Monterrey', ciudad: 'Monterrey', pais: 'México' },
+
+    // Latinoamérica y Caribe
+    BOG: { lat: 4.7016, lng: -74.1469, nombre: 'Bogotá El Dorado', ciudad: 'Bogotá', pais: 'Colombia' },
+    MDE: { lat: 6.1645, lng: -75.4231, nombre: 'Medellín José María Córdova', ciudad: 'Medellín', pais: 'Colombia' },
+    LIM: { lat: -12.0219, lng: -77.1143, nombre: 'Lima Jorge Chávez', ciudad: 'Lima', pais: 'Perú' },
+    CUZ: { lat: -13.5357, lng: -71.9388, nombre: 'Cusco', ciudad: 'Cusco', pais: 'Perú' },
+    UIO: { lat: -0.1292, lng: -78.3575, nombre: 'Quito', ciudad: 'Quito', pais: 'Ecuador' },
+    GYE: { lat: -2.1574, lng: -79.8836, nombre: 'Guayaquil', ciudad: 'Guayaquil', pais: 'Ecuador' },
+    CCS: { lat: 10.6031, lng: -66.9912, nombre: 'Caracas Simón Bolívar', ciudad: 'Caracas', pais: 'Venezuela' },
+    SCL: { lat: -33.3929, lng: -70.7858, nombre: 'Santiago de Chile', ciudad: 'Santiago', pais: 'Chile' },
+    IPC: { lat: -27.1648, lng: -109.4212, nombre: 'Isla de Pascua', ciudad: 'Hanga Roa', pais: 'Chile' },
+    EZE: { lat: -34.8222, lng: -58.5358, nombre: 'Buenos Aires Ezeiza', ciudad: 'Buenos Aires', pais: 'Argentina' },
+    AEP: { lat: -34.5592, lng: -58.4156, nombre: 'Buenos Aires Aeroparque', ciudad: 'Buenos Aires', pais: 'Argentina' },
+    COR: { lat: -31.3236, lng: -64.2080, nombre: 'Córdoba', ciudad: 'Córdoba', pais: 'Argentina' },
+    MVD: { lat: -34.8384, lng: -56.0308, nombre: 'Montevideo Carrasco', ciudad: 'Montevideo', pais: 'Uruguay' },
+    ASU: { lat: -25.2399, lng: -57.5191, nombre: 'Asunción Silvio Pettirossi', ciudad: 'Asunción', pais: 'Paraguay' },
+    VVI: { lat: -17.6448, lng: -63.1354, nombre: 'Santa Cruz Viru Viru', ciudad: 'Santa Cruz', pais: 'Bolivia' },
+    LPB: { lat: -16.5133, lng: -68.1923, nombre: 'La Paz El Alto', ciudad: 'La Paz', pais: 'Bolivia' },
+    GRU: { lat: -23.4356, lng: -46.4731, nombre: 'São Paulo-Guarulhos', ciudad: 'São Paulo', pais: 'Brasil' },
+    CGH: { lat: -23.6261, lng: -46.6566, nombre: 'São Paulo-Congonhas', ciudad: 'São Paulo', pais: 'Brasil' },
+    GIG: { lat: -22.8090, lng: -43.2506, nombre: 'Río de Janeiro Galeão', ciudad: 'Río de Janeiro', pais: 'Brasil' },
+    SDU: { lat: -22.9105, lng: -43.1631, nombre: 'Río de Janeiro Santos Dumont', ciudad: 'Río de Janeiro', pais: 'Brasil' },
+    BSB: { lat: -15.8692, lng: -47.9208, nombre: 'Brasilia', ciudad: 'Brasilia', pais: 'Brasil' },
+    SSA: { lat: -12.9086, lng: -38.3225, nombre: 'Salvador de Bahía', ciudad: 'Salvador', pais: 'Brasil' },
+    REC: { lat: -8.1265, lng: -34.9236, nombre: 'Recife', ciudad: 'Recife', pais: 'Brasil' },
+    PTY: { lat: 9.0714, lng: -79.3835, nombre: 'Panamá Tocumen', ciudad: 'Ciudad de Panamá', pais: 'Panamá' },
+    SJO: { lat: 9.9939, lng: -84.2088, nombre: 'San José Juan Santamaría', ciudad: 'San José', pais: 'Costa Rica' },
+    GUA: { lat: 14.5833, lng: -90.5275, nombre: 'Ciudad de Guatemala', ciudad: 'Ciudad de Guatemala', pais: 'Guatemala' },
+    SAL: { lat: 13.4409, lng: -89.0557, nombre: 'San Salvador', ciudad: 'San Salvador', pais: 'El Salvador' },
+    SAP: { lat: 15.4526, lng: -87.9236, nombre: 'San Pedro Sula', ciudad: 'San Pedro Sula', pais: 'Honduras' },
+    MGA: { lat: 12.1415, lng: -86.1682, nombre: 'Managua', ciudad: 'Managua', pais: 'Nicaragua' },
+    HAV: { lat: 22.9892, lng: -82.4091, nombre: 'La Habana', ciudad: 'La Habana', pais: 'Cuba' },
+    PUJ: { lat: 18.5674, lng: -68.3634, nombre: 'Punta Cana', ciudad: 'Punta Cana', pais: 'República Dominicana' },
+    SDQ: { lat: 18.4297, lng: -69.6689, nombre: 'Santo Domingo', ciudad: 'Santo Domingo', pais: 'República Dominicana' },
+    SJU: { lat: 18.4394, lng: -66.0018, nombre: 'San Juan', ciudad: 'San Juan', pais: 'Puerto Rico' }
+};
+
+// ==========================================
+// BASE DE DATOS DE AEROLÍNEAS
+// ==========================================
+const airlineDatabase = {
+    'FR': { nombre: 'Ryanair', avion: 'Boeing 737-800', codigo: 'RYR' },
+    'IB': { nombre: 'Iberia', avion: 'Airbus A320', codigo: 'IBE' },
+    'UX': { nombre: 'Air Europa', avion: 'Boeing 737-800', codigo: 'AEA' },
+    'AZ': { nombre: 'ITA Airways', avion: 'Airbus A320', codigo: 'ITY' },
+    'VY': { nombre: 'Vueling', avion: 'Airbus A320', codigo: 'VLG' },
+    'U2': { nombre: 'EasyJet', avion: 'Airbus A320', codigo: 'EZY' },
+    'AA': { nombre: 'American Airlines', avion: 'Boeing 777', codigo: 'AAL' },
+    'DL': { nombre: 'Delta Airlines', avion: 'Airbus A330', codigo: 'DAL' },
+    'BA': { nombre: 'British Airways', avion: 'Airbus A380', codigo: 'BAW' },
+    'AF': { nombre: 'Air France', avion: 'Airbus A350', codigo: 'AFR' },
+    'LH': { nombre: 'Lufthansa', avion: 'Boeing 747-8', codigo: 'DLH' }
+};
+
+const aviationQuizQuestions = [
+    {
+        question: "¿Qué significa IATA en aviación comercial?",
+        options: ["Asociación Internacional de Transporte Aéreo", "Autoridad Internacional de Tráfico Aéreo", "Agencia Iberoamericana de Terminales Aéreas"],
+        correct: 0
+    },
+    {
+        question: "¿Qué código IATA corresponde al aeropuerto de Madrid-Barajas?",
+        options: ["BCN", "MAD", "MXP"],
+        correct: 1
+    },
+    {
+        question: "¿Qué parte del avión ayuda a generar sustentación?",
+        options: ["Las alas", "El tren de aterrizaje", "La cabina"],
+        correct: 0
+    },
+    {
+        question: "¿Qué fase ocurre antes del despegue?",
+        options: ["Taxi", "Crucero", "Aproximación final"],
+        correct: 0
+    }
+];
+
+// ==========================================
+// INICIALIZACIÓN DEL MAPA LEAFLET
+// ==========================================
+function inicializarMapa() {
+    map = L.map('leafletMap').setView([43, 2], 5);
+    
+    // Capa base estilo Google Maps
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        maxZoom: 18,
+        className: 'map-tiles'
+    }).addTo(map);
+    
+    // Icono personalizado para el avión
+    const iconoAvion = L.divIcon({
+        html: '✈',
+        className: 'plane-icon',
+        iconSize: [30, 30],
+        iconAnchor: [15, 15]
+    });
+    
+    console.log('✅ Mapa inicializado correctamente');
+}
+
+// ==========================================
+// OCR - PROCESAR TARJETA DE EMBARQUE
+// ==========================================
+document.getElementById("imageInput").addEventListener("change", async function(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    
+    // Mostrar estado de carga
+    mostrarEstadoCarga(true);
+    setText("flight", "🔍 Analizando tarjeta...");
+    setText("route", "Procesando OCR...");
+    
+    try {
+        const result = await Tesseract.recognize(file, "eng+spa", {
+            logger: info => {
+                if (info.status === 'recognizing text') {
+                    const progress = Math.round(info.progress * 100);
+                    setText("flight", `📊 Reconociendo texto (${progress}%)`);
+                }
+            }
+        });
+        
+        const text = result.data.text.toUpperCase();
+        console.log('📝 Texto reconocido:', text);
+        
+        // Extraer datos del vuelo
+        const routeData = extraerDatosRuta(text);
+        const extractedDate = extraerFecha(text);
+        
+        currentFlight = {
+            flight: extraerNumeroVuelo(text),
+            route: routeData.route,
+            origin: routeData.origin,
+            destination: routeData.destination,
+            seat: extraerAsiento(text),
+            gate: extraerPuerta(text),
+            boardingGroup: extraerGrupo(text),
+            departureTime: extraerHoraVuelo(text),
+            boardingTime: extraerHoraEmbarque(text),
+            date: extractedDate,
+            flightDate: resolverFechaVueloISO(extractedDate),
+            rawText: text
+        };
+
+        registerUploadedBoardingPass(currentFlight);
+        
+        // Actualizar interfaz
+        actualizarPantalla();
+        mostrarEstadoCarga(false);
+        updateDetailedWeatherWidgets();
+        
+        // Mostrar notificación
+        mostrarNotificacion('✅ Tarjeta de embarque procesada', 'success');
+        
+    } catch (error) {
+        console.error("❌ Error OCR:", error);
+        mostrarEstadoCarga(false);
+        setText("flight", "❌ Error al procesar");
+        mostrarNotificacion('Error al leer la tarjeta de embarque', 'error');
+        
+        // Cargar vuelo demo
+        setTimeout(() => {
+            cargarVueloDemo();
+        }, 1000);
+    }
+});
+
+// ==========================================
+// FUNCIONES DE EXTRACCIÓN OCR MEJORADAS
+// ==========================================
+function extraerNumeroVuelo(text) {
+    // Buscar patrones como: FR2481, IB3245, UX1065, VY8432
+    const patrones = [
+        /([A-Z]{2})\s*(\d{3,4})/g,
+        /([A-Z]{3})\s*(\d{2,4})/g,
+        /FLIGHT\s*[:]?\s*([A-Z]{2,3}\s*\d{2,4})/i
+    ];
+    
+    for (let patron of patrones) {
+        const match = patron.exec(text);
+        if (match) {
+            return match[1] + match[2];
+        }
+    }
+    
+    return "---";
+}
+
+function extraerAsiento(text) {
+    // Buscar patrones: 23A, 14F, SEAT 12C
+    const patrones = [
+        /(\d{1,2}[A-F])\b/,
+        /SEAT\s*[:]?\s*(\d{1,2}[A-F])/i,
+        /ASIENTO\s*[:]?\s*(\d{1,2}[A-F])/i
+    ];
+    
+    for (let patron of patrones) {
+        const match = text.match(patron);
+        if (match) return match[1];
+    }
+    
+    return "---";
+}
+
+function extraerPuerta(text) {
+    const patrones = [
+        /\bGATE\s*[:\-]?\s*([A-Z]?\d{1,3})\b/i,
+        /\bPUERTA\s*[:\-]?\s*([A-Z]?\d{1,3})\b/i,
+        /\bEMBARQUE\s*[:\-]?\s*([A-Z]?\d{1,3})\b/i
+    ];
+
+    for (let patron of patrones) {
+        const match = text.match(patron);
+        if (match) return match[1].toUpperCase();
+    }
+
+    return "---";
+}
+
+function extraerGrupo(text) {
+    const patrones = [
+        /\bGROUP\s*[:\-]?\s*([A-Z0-9]{1,3})\b/i,
+        /\bGRUPO\s*[:\-]?\s*([A-Z0-9]{1,3})\b/i,
+        /\bZONE\s*[:\-]?\s*([A-Z0-9]{1,3})\b/i
+    ];
+
+    for (let patron of patrones) {
+        const match = text.match(patron);
+        if (match) return match[1].toUpperCase();
+    }
+
+    return "---";
+}
+
+function extraerHoraVuelo(text) {
+    const directMatch = text.match(/\b(?:DEP|DEPARTURE|SALIDA|FLIGHT TIME)\s*[:\-]?\s*([0-2]?\d[:.][0-5]\d)\b/i);
+    if (directMatch?.[1]) {
+        return directMatch[1].replace(".", ":").padStart(5, "0");
+    }
+
+    const genericTimes = Array.from(text.matchAll(/\b([0-2]?\d[:.][0-5]\d)\b/g)).map(match => match[1]);
+    const firstUseful = genericTimes.find(value => !value.startsWith("00"));
+    return firstUseful ? firstUseful.replace(".", ":").padStart(5, "0") : "";
+}
+
+function extraerHoraEmbarque(text) {
+    const patterns = [
+        /\b(?:BOARDING|EMBARQUE)\s*[:\-]?\s*([0-2]?\d[:.][0-5]\d)\b/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match?.[1]) {
+            return match[1].replace(".", ":").padStart(5, "0");
+        }
+    }
+
+    return "";
+}
+
+function extraerFecha(text) {
+    const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", 
+                   "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+    
+    // Buscar formato: 15MAR, 23 JUN, 07NOV
+    for (let month of months) {
+        const regex = new RegExp(`(\\d{1,2})\\s*${month}`, 'i');
+        const match = text.match(regex);
+        if (match) {
+            const dia = match[1].padStart(2, '0');
+            return `${dia} ${month}`;
+        }
+    }
+    
+    // Buscar formato: 2024-03-15, 15/03/2024
+    const dateRegex = /(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4})/;
+    const dateMatch = text.match(dateRegex);
+    if (dateMatch) return dateMatch[1];
+    
+    return new Date().toLocaleDateString();
+}
+
+function resolverFechaVueloISO(dateText) {
+    if (!dateText || dateText === "---") {
+        return formatearFechaISO(new Date());
+    }
+
+    const normalized = dateText.trim().toUpperCase();
+    const monthMap = {
+        JAN: 0, FEB: 1, MAR: 2, APR: 3, MAY: 4, JUN: 5,
+        JUL: 6, AUG: 7, SEP: 8, OCT: 9, NOV: 10, DEC: 11
+    };
+
+    const monthMatch = normalized.match(/^(\d{1,2})\s*([A-Z]{3})$/);
+    if (monthMatch && monthMap[monthMatch[2]] !== undefined) {
+        const today = new Date();
+        let year = today.getFullYear();
+        const candidate = new Date(year, monthMap[monthMatch[2]], Number(monthMatch[1]));
+
+        if (candidate < sumarDias(inicioDelDia(today), -180)) {
+            year += 1;
+        }
+
+        return formatearFechaISO(new Date(year, monthMap[monthMatch[2]], Number(monthMatch[1])));
+    }
+
+    const slashMatch = normalized.match(/^(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{2,4})$/);
+    if (slashMatch) {
+        const day = Number(slashMatch[1]);
+        const month = Number(slashMatch[2]) - 1;
+        const rawYear = Number(slashMatch[3]);
+        const year = rawYear < 100 ? 2000 + rawYear : rawYear;
+        return formatearFechaISO(new Date(year, month, day));
+    }
+
+    const parsed = new Date(dateText);
+    if (!Number.isNaN(parsed.getTime())) {
+        return formatearFechaISO(parsed);
+    }
+
+    return formatearFechaISO(new Date());
+}
+
+function extraerDatosRuta(text) {
+    const codigosAeropuertos = Object.keys(airportDatabase);
+    const encontrados = codigosAeropuertos.filter(codigo => 
+        text.includes(codigo) || text.includes(codigo.toLowerCase())
+    );
+    
+    if (encontrados.length >= 2) {
+        return {
+            route: `${encontrados[0]} → ${encontrados[1]}`,
+            origin: encontrados[0],
+            destination: encontrados[1]
+        };
+    }
+    
+    return {
+        route: "---",
+        origin: "MAD",
+        destination: "MXP"
+    };
+}
+
+// ==========================================
+// ACTUALIZAR PANTALLA CON DATOS DEL VUELO
+// ==========================================
+function actualizarPantalla() {
+    currentFlight.flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
+
+    // Datos básicos
+    setText("flight", `🛫 ${currentFlight.flight}`);
+    setText("route", `📍 ${currentFlight.route}`);
+    setText("seat", `💺 ${currentFlight.seat}`);
+    setText("date", `📅 ${currentFlight.date}`);
+    actualizarChecklistVuelo();
+    ensureFlightPackingList();
+    renderPackingChecklist();
+    updateSeatRecommendation();
+    updatePassportStamps();
+    renderAssistantState(
+        "Estoy preparando avisos inteligentes del vuelo con fecha, clima, puerta y destino.",
+        "Analizando vuelo",
+        [{ label: "Procesando datos" }],
+        [{
+            title: "Calculando alertas",
+            detail: "Estoy cruzando la ruta, el clima y la fecha del vuelo para darte avisos útiles.",
+            icon: "🧠",
+            severity: "success"
+        }],
+        [{
+            title: "Preparando viaje",
+            detail: "En unos instantes tendrás recomendaciones de check-in, equipaje y puerta."
+        }]
+    );
+    
+    // Enriquecer con datos adicionales
+    enriquecerDatosVuelo();
+}
+
+async function enriquecerDatosVuelo() {
+    // Detectar aerolínea
+    const codigoAerolinea = currentFlight.flight.substring(0, 2);
+    const aerolinea = airlineDatabase[codigoAerolinea];
+    
+    if (aerolinea) {
+        currentFlight.airlineName = aerolinea.nombre;
+        currentFlight.aircraftName = aerolinea.avion;
+        setText("airline", `🏢 ${aerolinea.nombre}`);
+        setText("aircraft", `✈️ ${aerolinea.avion}`);
+    } else {
+        currentFlight.airlineName = "Desconocida";
+        currentFlight.aircraftName = "No identificado";
+        setText("airline", "🏢 Desconocida");
+        setText("aircraft", "✈️ No identificado");
+    }
+    
+    // Calcular datos de ruta
+    calcularDatosRuta();
+    
+    // Mostrar en el mapa
+    mostrarRutaEnMapa();
+
+    // Cargar clima real o predicción según la fecha del vuelo
+    await cargarClimaVuelo();
+    await updateSmartAssistant();
+}
+
+function calcularDatosRuta() {
+    const origen = airportDatabase[currentFlight.origin];
+    const destino = airportDatabase[currentFlight.destination];
+    
+    if (origen && destino) {
+        // Calcular distancia
+        const distancia = calcularDistancia(
+            origen.lat, origen.lng, 
+            destino.lat, destino.lng
+        );
+        
+        // Estimar duración (velocidad promedio 800 km/h)
+        const duracionHoras = distancia / 800;
+        const horas = Math.floor(duracionHoras);
+        const minutos = Math.round((duracionHoras - horas) * 60);
+        
+        // Actualizar UI
+        currentFlight.distanceKm = Math.round(distancia);
+        currentFlight.durationMinutes = (horas * 60) + minutos;
+        setText("distance", `📏 ${Math.round(distancia)} km`);
+        setText("duration", `⏱️ ${horas}h ${minutos}m`);
+        
+        // Actualizar estadísticas
+        document.getElementById('distanceDisplay').textContent = `${Math.round(distancia)} km`;
+        document.getElementById('durationDisplay').textContent = `${horas}h ${minutos}m`;
+        
+        setText("weather", "🌤️ Consultando clima...");
+        setText("timezone", "🕐 Calculando...");
+    } else {
+        setText("distance", "📏 Calculando...");
+        setText("duration", "⏱️ Calculando...");
+    }
+
+    updateConversionSummary();
+}
+
+// ==========================================
+// FUNCIONES DEL MAPA LEAFLET
+// ==========================================
+function mostrarRutaEnMapa() {
+    if (!map) inicializarMapa();
+    
+    const origen = airportDatabase[currentFlight.origin];
+    const destino = airportDatabase[currentFlight.destination];
+    
+    if (!origen || !destino) return;
+    
+    // Limpiar mapa
+    limpiarMapa();
+    
+    // Actualizar texto
+    document.getElementById('flightPathText').textContent = 
+        `🌍 ${origen.ciudad} (${currentFlight.origin}) → ${destino.ciudad} (${currentFlight.destination})`;
+    
+    // Crear puntos de ruta
+    puntosRuta = [
+        [origen.lat, origen.lng],
+        [destino.lat, destino.lng]
+    ];
+    
+    // Dibujar línea de ruta
+    rutaActual = L.polyline(puntosRuta, {
+        color: '#2f80ed',
+        weight: 4,
+        opacity: 0.8,
+        smoothFactor: 1,
+        className: 'flight-route-line'
+    }).addTo(map);
+    
+    // Marcadores de aeropuertos
+    marcadorOrigen = L.marker([origen.lat, origen.lng], {
+        icon: crearIconoAeropuerto('origin')
+    }).bindPopup(`
+        <b>🛫 ${currentFlight.origin}</b><br>
+        ${origen.nombre}<br>
+        ${origen.ciudad}, ${origen.pais}
+    `).addTo(map);
+    
+    marcadorDestino = L.marker([destino.lat, destino.lng], {
+        icon: crearIconoAeropuerto('destination')
+    }).bindPopup(`
+        <b>🛬 ${currentFlight.destination}</b><br>
+        ${destino.nombre}<br>
+        ${destino.ciudad}, ${destino.pais}
+    `).addTo(map);
+    
+    // Marcador del avión
+    marcadorAvion = L.marker([origen.lat, origen.lng], {
+        icon: L.divIcon({
+            html: '✈',
+            className: 'plane-icon',
+            iconSize: [30, 30],
+            iconAnchor: [15, 15]
+        })
+    }).addTo(map);
+    
+    // Ajustar vista del mapa
+    map.fitBounds(rutaActual.getBounds(), { padding: [50, 50] });
+    
+    // Abrir popups
+    marcadorOrigen.openPopup();
+    setTimeout(() => marcadorDestino.openPopup(), 500);
+}
+
+function animarVuelo() {
+    if (!puntosRuta.length) {
+        mostrarNotificacion('Primero carga un vuelo', 'warning');
+        return;
+    }
+    
+    // Limpiar animación anterior
+    if (intervaloAnimacion) clearInterval(intervaloAnimacion);
+    
+    indiceAnimacion = 0;
+    const origen = puntosRuta[0];
+    const destino = puntosRuta[1];
+    
+    // Posicionar avión al inicio
+    marcadorAvion.setLatLng(origen);
+    marcadorAvion.bindPopup('🛫 Despegando...').openPopup();
+    
+    // Calcular pasos de animación
+    const pasos = 100;
+    const deltaLat = (destino[0] - origen[0]) / pasos;
+    const deltaLng = (destino[1] - origen[1]) / pasos;
+    
+    // Calcular duración realista basada en distancia
+    const distance = currentFlight.distanceKm || 1000; // km
+    const avgSpeed = 850; // km/h
+    const realFlightHours = distance / avgSpeed;
+    const animationSecondsPerHour = 3600; // 3600 segundos (1 hora) de animación por hora real para tiempo real
+    const baseAnimationMs = realFlightHours * animationSecondsPerHour * 1000;
+    const actualAnimationMs = baseAnimationMs / speedMultiplier;
+    const intervalMs = actualAnimationMs / pasos;
+    
+    // Animar
+    intervaloAnimacion = setInterval(() => {
+        indiceAnimacion++;
+        
+        if (indiceAnimacion <= pasos) {
+            const nuevaLat = origen[0] + (deltaLat * indiceAnimacion);
+            const nuevaLng = origen[1] + (deltaLng * indiceAnimacion);
+            
+            marcadorAvion.setLatLng([nuevaLat, nuevaLng]);
+            
+            // Actualizar progreso
+            const progreso = Math.round((indiceAnimacion / pasos) * 100);
+            marcadorAvion.setPopupContent(`✈ En vuelo - ${progreso}%`);
+            
+            // Suavizar movimiento del mapa (opcional)
+            if (indiceAnimacion % 10 === 0) {
+                map.panTo([nuevaLat, nuevaLng], { animate: true, duration: 0.5 });
+            }
+            
+            if (indiceAnimacion === pasos) {
+                marcadorAvion.setPopupContent('🛬 ¡Aterrizado!').openPopup();
+                clearInterval(intervaloAnimacion);
+                intervaloAnimacion = null;
+                mostrarNotificacion('✅ Vuelo completado', 'success');
+            }
+        } else {
+            clearInterval(intervaloAnimacion);
+            intervaloAnimacion = null;
+        }
+    }, Math.max(intervalMs, 10)); // mínimo 10ms para evitar intervalos demasiado pequeños
+}
+
+function limpiarMapa() {
+    if (rutaActual) map.removeLayer(rutaActual);
+    if (marcadorOrigen) map.removeLayer(marcadorOrigen);
+    if (marcadorDestino) map.removeLayer(marcadorDestino);
+    if (marcadorAvion) map.removeLayer(marcadorAvion);
+    if (intervaloAnimacion) {
+        clearInterval(intervaloAnimacion);
+        intervaloAnimacion = null;
+    }
+}
+
+function resetearMapa() {
+    limpiarMapa();
+    map.setView([43, 2], 5);
+    document.getElementById('flightPathText').textContent = '🌍 Ruta: ---';
+    document.getElementById('distanceDisplay').textContent = '--- km';
+    document.getElementById('durationDisplay').textContent = '---';
+}
+
+// ==========================================
+// FUNCIONES DE TRANSPORTE TERRESTRE
+// ==========================================
+function calcularTransporteTerrestre() {
+    const origin = document.getElementById('homeAddress').value.trim();
+    const destination = document.getElementById('destinationAddress').value.trim();
+    const transportMode = document.getElementById('transportModeSelect').value;
+
+    if (!origin || !destination) {
+        mostrarNotificacion('Ingresa ambas direcciones', 'warning');
+        return;
+    }
+
+    // Usar Google Maps Directions API
+    if (typeof google !== 'undefined' && google.maps) {
+        calcularRutaReal(origin, destination, transportMode);
+    } else {
+        // Fallback a simulación mejorada
+        calcularRutaSimulada(origin, destination, transportMode);
+    }
+}
+
+function calcularRutaReal(origin, destination, mode) {
+    const directionsService = new google.maps.DirectionsService();
+    
+    // Mapear tipos de transporte a modos de Google Maps
+    let travelMode;
+    let drivingOptions = undefined;
+    let transitOptions = undefined;
+    
+    switch(mode) {
+        case 'driving':
+        case 'taxi':
+        case 'uber':
+        case 'cabify':
+        case 'motorcycle':
+        case 'scooter':
+            travelMode = google.maps.TravelMode.DRIVING;
+            drivingOptions = {
+                departureTime: new Date(),
+                trafficModel: google.maps.TrafficModel.BEST_GUESS
+            };
+            break;
+        case 'transit':
+        case 'train':
+        case 'subway':
+        case 'bus':
+            travelMode = google.maps.TravelMode.TRANSIT;
+            transitOptions = {
+                departureTime: new Date()
+            };
+            break;
+        case 'bicycle':
+            travelMode = google.maps.TravelMode.BICYCLING;
+            break;
+        case 'walking':
+            travelMode = google.maps.TravelMode.WALKING;
+            break;
+        case 'flight':
+            // Para vuelos, usar simulación ya que Google Maps no maneja rutas aéreas
+            calcularRutaSimulada(origin, destination, mode);
+            return;
+        default:
+            travelMode = google.maps.TravelMode.DRIVING;
+    }
+    
+    const request = {
+        origin: origin,
+        destination: destination,
+        travelMode: travelMode,
+        drivingOptions: drivingOptions,
+        transitOptions: transitOptions
+    };
+
+    directionsService.route(request, (result, status) => {
+        if (status === google.maps.DirectionsStatus.OK) {
+            mostrarResultadoRuta(result, mode);
+        } else {
+            console.error('Error en Directions API:', status);
+            mostrarNotificacion('Error al calcular ruta. Usando simulación.', 'warning');
+            calcularRutaSimulada(origin, destination, mode);
+        }
+    });
+}
+
+function mostrarResultadoRuta(result, mode) {
+    const route = result.routes[0];
+    const leg = route.legs[0];
+    
+    const duration = leg.duration.text;
+    const durationInTraffic = leg.duration_in_traffic ? leg.duration_in_traffic.text : duration;
+    const distance = leg.distance.text;
+    const distanceKm = leg.distance.value / 1000;
+    
+    // Calcular costo basado en el tipo de transporte
+    const costInfo = calcularCostoTransporte(mode, distanceKm, leg.duration.value / 60);
+    
+    // Obtener emoji y nombre del transporte
+    const transportInfo = getTransportInfo(mode);
+    
+    // Actualizar UI
+    document.getElementById('transportTitle').innerHTML = `${transportInfo.emoji} ${transportInfo.name}`;
+    document.getElementById('transportTime').innerHTML = `Tiempo estimado: ${mode === 'driving' || mode === 'taxi' || mode === 'uber' || mode === 'cabify' || mode === 'motorcycle' || mode === 'scooter' ? durationInTraffic + ' (con tráfico)' : duration}`;
+    document.getElementById('transportDistance').innerHTML = `Distancia: ${distance}`;
+    document.getElementById('transportCost').innerHTML = `Costo aproximado: ${costInfo.cost} €<br>(${costInfo.details})`;
+    
+    // Mostrar el resultado
+    document.getElementById('selectedTransportResult').style.display = 'block';
+    
+    // Guardar datos para cálculo de salida
+    window.lastRouteData = {
+        durationMinutes: Math.round(leg.duration.value / 60),
+        mode: mode,
+        cost: costInfo.cost
+    };
+
+    mostrarNotificacion('Ruta calculada con datos reales', 'success');
+}
+
+function calcularCostoTransporte(mode, distanceKm, durationMinutes) {
+    let cost = 0;
+    let details = '';
+    
+    switch(mode) {
+        case 'driving':
+            cost = Math.round(distanceKm * 0.15 * 100) / 100;
+            details = 'Gasolina (~0.15€/km)';
+            break;
+        case 'taxi':
+            cost = Math.round((2.5 + distanceKm * 1.2) * 100) / 100; // Tarifa base + precio por km
+            details = 'Taxi (~2.50€ base + 1.20€/km)';
+            break;
+        case 'uber':
+        case 'cabify':
+            cost = Math.round((1.5 + distanceKm * 0.8) * 100) / 100; // Tarifa más baja que taxi
+            details = `${mode === 'uber' ? 'Uber' : 'Cabify'} (~1.50€ base + 0.80€/km)`;
+            break;
+        case 'motorcycle':
+        case 'scooter':
+            cost = Math.round(distanceKm * 0.08 * 100) / 100; // Menos consumo que coche
+            details = `${mode === 'motorcycle' ? 'Motocicleta' : 'Scooter'} (~0.08€/km combustible)`;
+            break;
+        case 'transit':
+        case 'bus':
+            cost = Math.round(durationMinutes * 0.1 * 100) / 100;
+            details = 'Autobús/Transporte público (~0.10€/min)';
+            break;
+        case 'train':
+        case 'subway':
+            cost = Math.round(durationMinutes * 0.08 * 100) / 100;
+            details = `${mode === 'train' ? 'Tren' : 'Metro'} (~0.08€/min)`;
+            break;
+        case 'bicycle':
+        case 'walking':
+            cost = 0;
+            details = 'Gratis';
+            break;
+        case 'flight':
+            cost = Math.round(distanceKm * 0.25 * 100) / 100; // Costo aproximado por km en avión
+            details = 'Vuelo (~0.25€/km promedio)';
+            break;
+        default:
+            cost = Math.round(distanceKm * 0.15 * 100) / 100;
+            details = 'Estimación general';
+    }
+    
+    return { cost, details };
+}
+
+function getTransportInfo(mode) {
+    const transportTypes = {
+        'driving': { emoji: '🚗', name: 'Coche privado' },
+        'taxi': { emoji: '🚕', name: 'Taxi' },
+        'uber': { emoji: '🚗', name: 'Uber' },
+        'cabify': { emoji: '🚙', name: 'Cabify' },
+        'motorcycle': { emoji: '🏍️', name: 'Motocicleta' },
+        'scooter': { emoji: '🛵', name: 'Scooter' },
+        'transit': { emoji: '🚌', name: 'Transporte público' },
+        'bus': { emoji: '🚌', name: 'Autobús' },
+        'train': { emoji: '🚂', name: 'Tren' },
+        'subway': { emoji: '🚇', name: 'Metro' },
+        'bicycle': { emoji: '🚲', name: 'Bicicleta' },
+        'walking': { emoji: '🚶', name: 'Caminando' },
+        'flight': { emoji: '✈️', name: 'Avión' }
+    };
+    
+    return transportTypes[mode] || { emoji: '🚗', name: 'Transporte' };
+}
+
+function calcularRutaSimulada(origin, destination, mode) {
+    // Simulación mejorada con datos más realistas
+    const baseDistance = Math.random() * 50 + 10; // 10-60 km
+    const trafficFactor = Math.random() * 0.5 + 0.8; // 0.8-1.3 (menos tráfico a más)
+    
+    let duration, speed;
+    
+    // Calcular velocidad y duración basada en el tipo de transporte
+    switch(mode) {
+        case 'driving':
+        case 'taxi':
+        case 'uber':
+        case 'cabify':
+            speed = 60 * trafficFactor; // 60 km/h con factor de tráfico
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'motorcycle':
+        case 'scooter':
+            speed = 45 * trafficFactor; // Más rápido en tráfico
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'transit':
+        case 'bus':
+            speed = 25; // 25 km/h promedio autobús
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'train':
+            speed = 80; // 80 km/h promedio tren
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'subway':
+            speed = 35; // 35 km/h promedio metro
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'bicycle':
+            speed = 15; // 15 km/h bicicleta
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'walking':
+            speed = 5; // 5 km/h caminando
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        case 'flight':
+            speed = 800; // 800 km/h avión
+            duration = Math.round(baseDistance / speed * 60);
+            break;
+        default:
+            speed = 60 * trafficFactor;
+            duration = Math.round(baseDistance / speed * 60);
+    }
+    
+    // Calcular costo
+    const costInfo = calcularCostoTransporte(mode, baseDistance, duration);
+    
+    // Obtener información del transporte
+    const transportInfo = getTransportInfo(mode);
+    
+    // Actualizar UI
+    document.getElementById('transportTitle').innerHTML = `${transportInfo.emoji} ${transportInfo.name}`;
+    document.getElementById('transportTime').innerHTML = `Tiempo estimado: ${duration} min${(mode === 'driving' || mode === 'taxi' || mode === 'uber' || mode === 'cabify' || mode === 'motorcycle' || mode === 'scooter') ? ' (con tráfico)' : ''}`;
+    document.getElementById('transportDistance').innerHTML = `Distancia: ~${Math.round(baseDistance)} km`;
+    document.getElementById('transportCost').innerHTML = `Costo aproximado: ${costInfo.cost} €<br>(${costInfo.details})`;
+    
+    // Mostrar el resultado
+    document.getElementById('selectedTransportResult').style.display = 'block';
+    
+    // Guardar datos para cálculo de salida
+    window.lastRouteData = {
+        durationMinutes: duration,
+        mode: mode,
+        cost: costInfo.cost
+    };
+
+    mostrarNotificacion('Ruta calculada (simulación)', 'success');
+}
+
+function calcularHoraSalida() {
+    const useFlightTime = document.getElementById('useFlightTime').checked;
+    let desiredArrivalTime;
+    let arrivalDate;
+
+    if (useFlightTime) {
+        // Usar la hora del vuelo actual
+        if (!currentFlight.date || !currentFlight.departureTime) {
+            mostrarNotificacion('No hay vuelo cargado con hora de salida', 'warning');
+            return;
+        }
+        
+        // El vuelo tiene departureTime, pero para llegada al aeropuerto necesitamos estimar
+        // Asumimos que el vuelo es la hora de llegada deseada
+        const flightDateTime = new Date(`${currentFlight.date}T${currentFlight.departureTime}`);
+        desiredArrivalTime = flightDateTime.toTimeString().slice(0, 5); // HH:MM
+        arrivalDate = flightDateTime.toISOString().split('T')[0]; // YYYY-MM-DD
+    } else {
+        desiredArrivalTime = document.getElementById('desiredArrivalTime').value;
+        const daySelect = document.getElementById('arrivalDay').value;
+        
+        if (!desiredArrivalTime) {
+            mostrarNotificacion('Ingresa la hora deseada de llegada', 'warning');
+            return;
+        }
+
+        const today = new Date();
+        if (daySelect === 'today') {
+            arrivalDate = today.toISOString().split('T')[0];
+        } else if (daySelect === 'tomorrow') {
+            const tomorrow = new Date(today);
+            tomorrow.setDate(today.getDate() + 1);
+            arrivalDate = tomorrow.toISOString().split('T')[0];
+        } else {
+            arrivalDate = document.getElementById('customArrivalDate').value;
+            if (!arrivalDate) {
+                mostrarNotificacion('Selecciona la fecha', 'warning');
+                return;
+            }
+        }
+    }
+
+    // Calcular tiempo de viaje (usar datos de ruta calculada)
+    let travelTimeMinutes = 45; // default
+    if (window.lastRouteData) {
+        travelTimeMinutes = window.lastRouteData.durationMinutes;
+    } else {
+        // Intentar extraer de la UI
+        const timeElement = document.getElementById('transportTime');
+        const timeMatch = timeElement?.textContent.match(/(\d+)\s*min/);
+        if (timeMatch) {
+            travelTimeMinutes = parseInt(timeMatch[1]);
+        }
+    }
+
+    // Margen de antelación
+    const bufferMinutes = parseInt(document.getElementById('bufferTime').value);
+
+    // Calcular hora de salida
+    const arrivalDateTime = new Date(`${arrivalDate}T${desiredArrivalTime}`);
+    const totalMinutesBefore = travelTimeMinutes + bufferMinutes;
+    const departureDateTime = new Date(arrivalDateTime.getTime() - totalMinutesBefore * 60000);
+
+    // Formatear resultado
+    const departureTimeStr = departureDateTime.toLocaleTimeString('es-ES', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+    });
+    
+    const arrivalTimeStr = arrivalDateTime.toLocaleTimeString('es-ES', { 
+        hour: '2-digit', 
+        minute: '2-digit',
+        hour12: false 
+    });
+
+    const resultDiv = document.getElementById('departureResult');
+    resultDiv.innerHTML = `
+        <div style="margin-bottom: 10px;">
+            <strong>📅 Llegada deseada:</strong> ${arrivalTimeStr} del ${arrivalDateTime.toLocaleDateString('es-ES')}
+        </div>
+        <div style="margin-bottom: 10px;">
+            <strong>⏱️ Tiempo estimado de viaje:</strong> ${travelTimeMinutes} min
+        </div>
+        <div style="margin-bottom: 10px;">
+            <strong>🛡️ Margen de antelación:</strong> ${bufferMinutes} min
+        </div>
+        <div style="font-size: 1.2em; color: #4CAF50;">
+            <strong>🚗 Debes salir a las ${departureTimeStr}</strong>
+        </div>
+    `;
+
+    mostrarNotificacion('Hora de salida calculada', 'success');
+}
+
+// ==========================================
+// FUNCIONES DE GASTOS DEL VIAJE
+// ==========================================
+function añadirGasto() {
+    const description = document.getElementById('expenseDescription').value.trim();
+    const amount = parseFloat(document.getElementById('expenseAmount').value);
+    const category = document.getElementById('expenseCategory').value;
+
+    if (!description || isNaN(amount) || amount <= 0) {
+        mostrarNotificacion('Ingresa descripción y monto válido', 'warning');
+        return;
+    }
+
+    const expense = {
+        description,
+        amount,
+        category,
+        date: new Date().toISOString()
+    };
+
+    tripExpenses.push(expense);
+    guardarGastos();
+    actualizarVistaGastos();
+
+    // Limpiar inputs
+    document.getElementById('expenseDescription').value = '';
+    document.getElementById('expenseAmount').value = '';
+
+    mostrarNotificacion('Gasto añadido', 'success');
+}
+
+function guardarGastos() {
+    localStorage.setItem('tripExpenses', JSON.stringify(tripExpenses));
+}
+
+function cargarGastos() {
+    const saved = localStorage.getItem('tripExpenses');
+    if (saved) {
+        tripExpenses = JSON.parse(saved);
+        actualizarVistaGastos();
+    }
+}
+
+function actualizarVistaGastos() {
+    const list = document.getElementById('expensesList');
+    const total = tripExpenses.reduce((sum, exp) => sum + exp.amount, 0);
+
+    list.innerHTML = tripExpenses.map((exp, index) => `
+        <div class="expense-item">
+            <div>
+                <strong>${exp.description}</strong> - ${exp.category}
+            </div>
+            <div>
+                ${exp.amount} € 
+                <button onclick="eliminarGasto(${index})" style="margin-left: 10px; background: #ff4444; color: white; border: none; padding: 2px 6px; border-radius: 3px; cursor: pointer;">X</button>
+            </div>
+        </div>
+    `).join('');
+
+    document.getElementById('totalExpenses').textContent = `${total.toFixed(2)} €`;
+
+    actualizarGraficoGastos();
+}
+
+function eliminarGasto(index) {
+    tripExpenses.splice(index, 1);
+    guardarGastos();
+    actualizarVistaGastos();
+}
+
+function actualizarGraficoGastos() {
+    const ctx = document.getElementById('expensesChart').getContext('2d');
+    
+    if (expensesChart) {
+        expensesChart.destroy();
+    }
+
+    const categories = {};
+    tripExpenses.forEach(exp => {
+        categories[exp.category] = (categories[exp.category] || 0) + exp.amount;
+    });
+
+    const labels = Object.keys(categories);
+    const data = Object.values(categories);
+
+    expensesChart = new Chart(ctx, {
+        type: 'pie',
+        data: {
+            labels,
+            datasets: [{
+                data,
+                backgroundColor: [
+                    '#FF6384',
+                    '#36A2EB',
+                    '#FFCE56',
+                    '#4BC0C0',
+                    '#9966FF'
+                ]
+            }]
+        },
+        options: {
+            responsive: true,
+            maintainAspectRatio: false,
+            plugins: {
+                legend: {
+                    position: 'bottom'
+                }
+            }
+        }
+    });
+}
+
+// ==========================================
+// FUNCIONES AUXILIARES
+// ==========================================
+function calcularDistancia(lat1, lon1, lat2, lon2) {
+    const R = 6371;
+    const dLat = (lat2 - lat1) * Math.PI / 180;
+    const dLon = (lon2 - lon1) * Math.PI / 180;
+    const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+              Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+              Math.sin(dLon/2) * Math.sin(dLon/2);
+    const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+    return R * c;
+}
+
+function crearIconoAeropuerto(tipo) {
+    return L.divIcon({
+        html: tipo === 'origin' ? '🛫' : '🛬',
+        className: `airport-icon airport-${tipo}`,
+        iconSize: [24, 24],
+        iconAnchor: [12, 12]
+    });
+}
+
+function obtenerZonaHoraria(lng) {
+    const horas = Math.round(lng / 15);
+    const signo = horas >= 0 ? '+' : '';
+    return `GMT${signo}${horas}`;
+}
+
+function inicioDelDia(date) {
+    return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function sumarDias(date, amount) {
+    const copy = new Date(date);
+    copy.setDate(copy.getDate() + amount);
+    return copy;
+}
+
+function formatearFechaISO(date) {
+    const year = date.getFullYear();
+    const month = String(date.getMonth() + 1).padStart(2, "0");
+    const day = String(date.getDate()).padStart(2, "0");
+    return `${year}-${month}-${day}`;
+}
+
+function formatearFechaCorta(dateString) {
+    const date = new Date(`${dateString}T00:00:00`);
+    return date.toLocaleDateString("es-ES", {
+        day: "2-digit",
+        month: "short"
+    });
+}
+
+function codigoClimaATexto(code) {
+    const codes = {
+        0: "Despejado",
+        1: "Mayormente despejado",
+        2: "Parcialmente nublado",
+        3: "Nublado",
+        45: "Niebla",
+        48: "Niebla helada",
+        51: "Llovizna ligera",
+        53: "Llovizna moderada",
+        55: "Llovizna intensa",
+        61: "Lluvia ligera",
+        63: "Lluvia moderada",
+        65: "Lluvia intensa",
+        71: "Nieve ligera",
+        73: "Nieve moderada",
+        75: "Nieve intensa",
+        80: "Chubascos ligeros",
+        81: "Chubascos moderados",
+        82: "Chubascos intensos",
+        95: "Tormenta"
+    };
+
+    return codes[code] || "Condición no disponible";
+}
+
+function renderWeatherHistory(days, flightDate) {
+    const container = document.getElementById("weatherHistory");
+    if (!container) return;
+
+    if (!days.length) {
+        container.innerHTML = '<div class="weather-day">Sin datos meteorológicos.</div>';
+        return;
+    }
+
+    // Calcular fechas para etiquetar correctamente
+    const flightDay = new Date(`${flightDate}T00:00:00`);
+    const previousDate = formatearFechaISO(sumarDias(flightDay, -1));
+    const nextDate = formatearFechaISO(sumarDias(flightDay, 1));
+
+    container.innerHTML = days.map(day => {
+        let label = "";
+        let className = "";
+        
+        if (day.date === previousDate) {
+            label = "Día anterior";
+            className = "is-previous-day";
+        } else if (day.date === flightDate) {
+            label = "Día del viaje";
+            className = "is-flight-day";
+        } else if (day.date === nextDate) {
+            label = "Día siguiente";
+            className = "is-next-day";
+        } else {
+            label = "Día anterior";
+        }
+
+        return `
+            <div class="weather-day ${className}">
+                <strong>${label} · ${formatearFechaCorta(day.date)}</strong><br>
+                ${day.summary} · ${day.tempMin}°C / ${day.tempMax}°C · ${day.precipitation} mm
+            </div>
+        `;
+    }).join("");
+}
+
+async function cargarClimaVuelo() {
+    const destination = airportDatabase[currentFlight.destination];
+    const flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
+
+    if (!destination || !flightDate) {
+        setText("weather", "Weather: ---");
+        const container = document.getElementById("weatherHistory");
+        if (container) container.innerHTML = "";
+        return;
+    }
+
+    const startDate = formatearFechaISO(sumarDias(new Date(`${flightDate}T00:00:00`), -WEATHER_LOOKBACK_DAYS));
+    const nextDate = formatearFechaISO(sumarDias(new Date(`${flightDate}T00:00:00`), 1));
+    const today = inicioDelDia(new Date());
+    const flightDayDate = inicioDelDia(new Date(`${flightDate}T00:00:00`));
+
+    try {
+        const weatherData = await obtenerResumenMeteorologico(destination, startDate, nextDate, today, flightDayDate);
+        const flightDay = weatherData.days.find(day => day.date === flightDate);
+        const timezoneLabel = weatherData.timezoneLabel || obtenerZonaHoraria(destination.lng);
+
+        if (flightDay) {
+            const sourceLabel = flightDay.isForecast ? "previsto" : "real";
+            setText(
+                "weather",
+                `🌤️ ${destination.ciudad}: ${flightDay.summary}, ${flightDay.tempMin}°C a ${flightDay.tempMax}°C (${sourceLabel})`
+            );
+        } else {
+            setText("weather", `🌤️ ${destination.ciudad}: sin datos disponibles`);
+        }
+
+        setText("timezone", `🕐 ${timezoneLabel}`);
+        renderWeatherHistory(weatherData.days, flightDate);
+    } catch (error) {
+        console.error("❌ Error obteniendo clima:", error);
+        setText("weather", `🌤️ ${destination.ciudad}: no se pudo obtener el clima`);
+        setText("timezone", `🕐 ${obtenerZonaHoraria(destination.lng)}`);
+        const container = document.getElementById("weatherHistory");
+        if (container) {
+            container.innerHTML = '<div class="weather-day">No se pudieron cargar los datos meteorológicos.</div>';
+        }
+    }
+}
+
+async function obtenerResumenMeteorologico(destination, startDate, endDate, today, flightDayDate) {
+    const startDay = inicioDelDia(new Date(`${startDate}T00:00:00`));
+    const diffStart = Math.round((startDay - today) / 86400000);
+    const diffEnd = Math.round((flightDayDate - today) / 86400000);
+
+    let url;
+
+    if (diffStart >= -92 && diffEnd <= 16) {
+        const pastDays = Math.max(0, Math.abs(Math.min(diffStart, 0)));
+        const forecastDays = Math.max(1, diffEnd >= 0 ? diffEnd + 1 : 1);
+
+        url = `https://api.open-meteo.com/v1/forecast?latitude=${destination.lat}&longitude=${destination.lng}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto&past_days=${pastDays}&forecast_days=${forecastDays}`;
+    } else {
+        url = `https://archive-api.open-meteo.com/v1/archive?latitude=${destination.lat}&longitude=${destination.lng}&start_date=${startDate}&end_date=${endDate}&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_sum&timezone=auto`;
+    }
+
+    const response = await fetch(url);
+    if (!response.ok) {
+        throw new Error(`Weather request failed with status ${response.status}`);
+    }
+
+    const data = await response.json();
+    const days = [];
+
+    for (let i = 0; i < data.daily.time.length; i++) {
+        const date = data.daily.time[i];
+        if (date < startDate || date > endDate) continue;
+
+        days.push({
+            date,
+            summary: codigoClimaATexto(data.daily.weather_code[i]),
+            tempMax: Math.round(data.daily.temperature_2m_max[i]),
+            tempMin: Math.round(data.daily.temperature_2m_min[i]),
+            precipitation: Number(data.daily.precipitation_sum[i] || 0).toFixed(1),
+            isForecast: inicioDelDia(new Date(`${date}T00:00:00`)) > today
+        });
+    }
+
+    return {
+        timezoneLabel: data.timezone_abbreviation || data.timezone || "",
+        days
+    };
+}
+
+function setText(id, text) {
+    const el = document.getElementById(id);
+    if (el) el.innerText = text;
+}
+
+function formatNumber(value) {
+    return new Intl.NumberFormat("es-ES").format(value);
+}
+
+function formatMinutes(totalMinutes) {
+    const safeMinutes = Math.max(0, totalMinutes || 0);
+    const hours = Math.floor(safeMinutes / 60);
+    const minutes = safeMinutes % 60;
+    return `${hours}h ${minutes}m`;
+}
+
+function updateStats() {
+    const history = JSON.parse(localStorage.getItem("flights")) || [];
+    const countries = new Set();
+    const airlines = new Set();
+    let totalKm = 0;
+    let totalMinutes = 0;
+
+    history.forEach(flight => {
+        if (Number.isFinite(flight.distanceKm)) {
+            totalKm += flight.distanceKm;
+        } else if (flight.origin && flight.destination && airportDatabase[flight.origin] && airportDatabase[flight.destination]) {
+            totalKm += Math.round(
+                calcularDistancia(
+                    airportDatabase[flight.origin].lat,
+                    airportDatabase[flight.origin].lng,
+                    airportDatabase[flight.destination].lat,
+                    airportDatabase[flight.destination].lng
+                )
+            );
+        }
+
+        if (Number.isFinite(flight.durationMinutes)) {
+            totalMinutes += flight.durationMinutes;
+        }
+
+        if (flight.origin && airportDatabase[flight.origin]) {
+            countries.add(airportDatabase[flight.origin].pais);
+        }
+
+        if (flight.destination && airportDatabase[flight.destination]) {
+            countries.add(airportDatabase[flight.destination].pais);
+        }
+
+        if (flight.airlineName) {
+            airlines.add(flight.airlineName);
+        } else if (flight.flight) {
+            const prefix = String(flight.flight).substring(0, 2).toUpperCase();
+            if (airlineDatabase[prefix]) {
+                airlines.add(airlineDatabase[prefix].nombre);
+            }
+        }
+    });
+
+    setText("statsTotalFlights", formatNumber(history.length));
+    setText("statsTotalKm", `${formatNumber(totalKm)} km`);
+    setText("statsTotalHours", formatMinutes(totalMinutes));
+    setText("statsCountries", formatNumber(countries.size));
+    setText("statsAirlines", formatNumber(airlines.size));
+}
+
+function updateAirportsHistory() {
+    const history = JSON.parse(localStorage.getItem("flights")) || [];
+    const container = document.getElementById("airportsHistoryList");
+    if (!container) return;
+
+    const airportsMap = new Map();
+
+    history.forEach(flight => {
+        [flight.origin, flight.destination].forEach(code => {
+            if (!code || !airportDatabase[code]) return;
+
+            const airport = airportDatabase[code];
+            const existing = airportsMap.get(code) || {
+                code,
+                nombre: airport.nombre,
+                ciudad: airport.ciudad,
+                pais: airport.pais,
+                count: 0
+            };
+
+            existing.count += 1;
+            airportsMap.set(code, existing);
+        });
+    });
+
+    const airports = Array.from(airportsMap.values()).sort((a, b) => {
+        if (b.count !== a.count) return b.count - a.count;
+        return a.code.localeCompare(b.code);
+    });
+
+    if (!airports.length) {
+        container.innerHTML = '<p>Sin aeropuertos guardados todavía.</p>';
+        return;
+    }
+
+    container.innerHTML = airports.map(airport => `
+        <div class="airport-history-item">
+            <div>
+                <strong>${airport.nombre}</strong>
+                <small>${airport.ciudad}, ${airport.pais} · ${airport.count} registro(s)</small>
+            </div>
+            <span class="airport-history-code">${airport.code}</span>
+        </div>
+    `).join("");
+}
+
+function getUpcomingFlights() {
+    return JSON.parse(localStorage.getItem("upcomingFlights") || "[]");
+}
+
+function saveUpcomingFlights(flights) {
+    localStorage.setItem("upcomingFlights", JSON.stringify(flights));
+}
+
+function getUploadedBoardingPasses() {
+    return JSON.parse(localStorage.getItem("uploadedBoardingPasses") || "[]");
+}
+
+function saveUploadedBoardingPasses(flights) {
+    localStorage.setItem("uploadedBoardingPasses", JSON.stringify(flights));
+}
+
+function registerUploadedBoardingPass(flight) {
+    if (!flight || !flight.flight) return;
+
+    const uploaded = getUploadedBoardingPasses();
+    const uniqueKey = `${flight.flight}-${flight.flightDate || resolverFechaVueloISO(flight.date)}-${flight.origin}-${flight.destination}`;
+    const exists = uploaded.some(item => item.uniqueKey === uniqueKey);
+    if (exists) return;
+
+    uploaded.push({
+        uniqueKey,
+        flight: flight.flight,
+        route: flight.route,
+        origin: flight.origin,
+        destination: flight.destination,
+        date: flight.date,
+        flightDate: flight.flightDate || resolverFechaVueloISO(flight.date)
+    });
+
+    saveUploadedBoardingPasses(uploaded);
+}
+
+function normalizeFlightNumber(value) {
+    return String(value || "")
+        .toUpperCase()
+        .replace(/\s+/g, "")
+        .trim();
+}
+
+function getAirlineNameFromFlightNumber(flightNumber) {
+    const prefix = normalizeFlightNumber(flightNumber).substring(0, 2);
+    return airlineDatabase[prefix]?.nombre || "Aerolínea pendiente";
+}
+
+function getAirportLabel(code) {
+    if (!code || !airportDatabase[code]) return code || "---";
+    const airport = airportDatabase[code];
+    return `${airport.ciudad} (${code})`;
+}
+
+function formatearFechaLarga(dateString) {
+    return new Date(`${dateString}T00:00:00`).toLocaleDateString("es-ES", {
+        weekday: "short",
+        day: "2-digit",
+        month: "long",
+        year: "numeric"
+    });
+}
+
+function formatTimeLabel(timeString) {
+    if (!timeString) return "--:--";
+    return String(timeString).replace(".", ":").slice(0, 5);
+}
+
+function combineFlightDateAndTime(dateString, timeString) {
+    if (!dateString || !timeString) return null;
+    const normalizedTime = formatTimeLabel(timeString);
+    const date = new Date(`${dateString}T${normalizedTime}:00`);
+    return Number.isNaN(date.getTime()) ? null : date;
+}
+
+function getRelativeHoursLabel(targetDate) {
+    if (!targetDate) return "";
+    const diffMs = targetDate.getTime() - Date.now();
+    const diffHours = diffMs / 3600000;
+
+    if (diffHours <= 0) return "ahora";
+    if (diffHours < 1) return `en ${Math.max(1, Math.round(diffMs / 60000))} min`;
+    return `en ${Math.round(diffHours)}h`;
+}
+
+function getDaysUntil(dateString) {
+    const today = inicioDelDia(new Date());
+    const target = inicioDelDia(new Date(`${dateString}T00:00:00`));
+    return Math.round((target - today) / 86400000);
+}
+
+function getUpcomingFlightBadge(daysUntil) {
+    if (daysUntil < 0) return "Pasado";
+    if (daysUntil === 0) return "Hoy";
+    if (daysUntil === 1) return "Mañana";
+    return `En ${daysUntil} días`;
+}
+
+function updatePlannerStatus(message) {
+    setText("plannerStatus", message);
+}
+
+function renderAssistantState(summary, confidence, tags, alerts, facts) {
+    const summaryEl = document.getElementById("assistantSummary");
+    const confidenceEl = document.getElementById("assistantConfidence");
+    const tagsEl = document.getElementById("assistantTags");
+    const alertsEl = document.getElementById("assistantAlerts");
+    const factsEl = document.getElementById("assistantFacts");
+
+    if (summaryEl) summaryEl.textContent = summary;
+    if (confidenceEl) confidenceEl.textContent = confidence;
+
+    if (tagsEl) {
+        tagsEl.innerHTML = tags.map(tag => `
+            <span class="assistant-tag ${tag.severity ? `is-${tag.severity}` : ""}">${tag.label}</span>
+        `).join("");
+    }
+
+    if (alertsEl) {
+        alertsEl.innerHTML = alerts.map(alert => `
+            <div class="assistant-alert ${alert.severity ? `is-${alert.severity}` : ""}">
+                <span class="assistant-alert-icon">${alert.icon || "✈️"}</span>
+                <div>
+                    <strong>${alert.title}</strong>
+                    <span>${alert.detail}</span>
+                </div>
+            </div>
+        `).join("");
+    }
+
+    if (factsEl) {
+        factsEl.innerHTML = facts.map(fact => `
+            <div class="assistant-fact">
+                <strong>${fact.title}</strong>
+                <span>${fact.detail}</span>
+            </div>
+        `).join("");
+    }
+}
+
+function renderDefaultAssistantState() {
+    renderAssistantState(
+        "Escanea una tarjeta y te avisaré de check-in, clima, puerta, documentos y señales del destino.",
+        "Esperando vuelo",
+        [{ label: "Sin vuelo cargado" }],
+        [{
+            title: "Asistente inactivo",
+            detail: "Cuando detecte una ruta, activaré recordatorios de salida, puerta, destino y preparación.",
+            icon: "🛰️",
+            severity: "warning"
+        }],
+        [{
+            title: "Listo para escanear",
+            detail: "Sube una tarjeta de embarque para personalizar el viaje al momento."
+        }]
+    );
+}
+
+function syncPackingChecklistWithAssistant(weather) {
+    const destination = airportDatabase[currentFlight.destination];
+    const city = destination?.ciudad || "destino";
+    const summary = weather?.daySummary;
+    const fallbackTemp = Number.isFinite(weather?.current?.temperature) ? weather.current.temperature : 14;
+    const tempMin = Number.isFinite(summary?.tempMin) ? summary.tempMin : fallbackTemp;
+    const tempMax = Number.isFinite(summary?.tempMax) ? summary.tempMax : fallbackTemp;
+    const rainCode = summary?.weatherCode;
+    const rainLikely = [51, 53, 55, 61, 63, 65, 80, 81, 82, 95].includes(rainCode) || /lluv|torment|chubasc/i.test(weather?.current?.forecast || "");
+
+    upsertPackingChecklistItem("packingClothing", `Ropa para ${city} (${tempMin}°C a ${tempMax}°C)`);
+    upsertPackingChecklistItem(
+        "packingUmbrella",
+        rainLikely ? `Paraguas para ${city} (hay lluvia prevista)` : `Paraguas plegable por si cambia el tiempo en ${city}`
+    );
+
+    if ((airportDatabase[currentFlight.origin]?.pais || "") !== (destination?.pais || "")) {
+        upsertPackingChecklistItem("packingDocsPassport", "Documentación, DNI/pasaporte y tarjeta de embarque");
+    }
+}
+
+async function updateSmartAssistant() {
+    if (!currentFlight.flight || currentFlight.flight === "---") {
+        renderDefaultAssistantState();
+        return;
+    }
+
+    const destination = airportDatabase[currentFlight.destination];
+    const origin = airportDatabase[currentFlight.origin];
+    const flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
+    const daysUntil = getDaysUntil(flightDate);
+    const departureAt = combineFlightDateAndTime(flightDate, currentFlight.departureTime);
+    const boardingAt = combineFlightDateAndTime(flightDate, currentFlight.boardingTime);
+    const gateCloseAt = boardingAt || (departureAt ? new Date(departureAt.getTime() - 20 * 60000) : null);
+    let weather = null;
+
+    if (destination) {
+        try {
+            weather = await fetchDetailedWeatherForFlight(currentFlight.destination, flightDate);
+            syncPackingChecklistWithAssistant(weather);
+            renderPackingChecklist();
+        } catch (error) {
+            console.error("❌ Error actualizando asistente inteligente:", error);
+        }
+    }
+
+    const tags = [];
+    const alerts = [];
+    const facts = [];
+    const city = destination?.ciudad || currentFlight.destination || "tu destino";
+    const country = destination?.pais;
+
+    if (daysUntil === 0) {
+        tags.push({ label: "Sales hoy", severity: "danger" });
+    } else if (daysUntil === 1) {
+        tags.push({ label: "Sales mañana", severity: "warning" });
+    } else if (daysUntil > 1) {
+        tags.push({ label: `Vuelo en ${daysUntil} días`, severity: "success" });
+    } else {
+        tags.push({ label: "Vuelo pasado", severity: "warning" });
+    }
+
+    if (currentFlight.departureTime) {
+        tags.push({ label: `Salida ${formatTimeLabel(currentFlight.departureTime)}` });
+    }
+
+    if (currentFlight.gate && currentFlight.gate !== "---") {
+        tags.push({ label: `Puerta ${currentFlight.gate}` });
+    }
+
+    if (currentFlight.boardingGroup && currentFlight.boardingGroup !== "---") {
+        tags.push({ label: `Grupo ${currentFlight.boardingGroup}` });
+    }
+
+    if (departureAt) {
+        const checkInAt = new Date(departureAt.getTime() - 24 * 3600000);
+        const relativeCheckIn = getRelativeHoursLabel(checkInAt);
+
+        if (Date.now() >= checkInAt.getTime() && Date.now() < departureAt.getTime()) {
+            alerts.push({
+                title: "Haz check-in ahora",
+                detail: `El check-in ya debería estar abierto para ${currentFlight.flight}. Cierra antes de la salida.`,
+                icon: "✅",
+                severity: "danger"
+            });
+        } else if (daysUntil <= 1) {
+            alerts.push({
+                title: `Haz check-in ${relativeCheckIn}`,
+                detail: `La salida estimada es a las ${formatTimeLabel(currentFlight.departureTime)} y conviene activar el check-in cuanto antes.`,
+                icon: "🕒",
+                severity: "warning"
+            });
+        }
+    } else if (daysUntil === 1) {
+        alerts.push({
+            title: "Haz check-in mañana",
+            detail: `No he detectado la hora exacta del vuelo, pero sales mañana. Ten la app de la aerolínea lista.`,
+            icon: "🕒",
+            severity: "warning"
+        });
+    }
+
+    if (weather?.daySummary) {
+        const { tempMin, tempMax, weatherCode, wind } = weather.daySummary;
+        const rainy = [51, 53, 55, 61, 63, 65, 80, 81, 82, 95].includes(weatherCode);
+        const windy = Number.isFinite(wind) && wind >= 28;
+
+        if (rainy) {
+            alerts.push({
+                title: `Mete paraguas en ${city}`,
+                detail: `Hay ${codigoClimaATexto(weatherCode).toLowerCase()} prevista y temperaturas entre ${tempMin}°C y ${tempMax}°C.`,
+                icon: "☔",
+                severity: "warning"
+            });
+        }
+
+        if (windy) {
+            alerts.push({
+                title: `Viento fuerte en ${city}`,
+                detail: `Se esperan rachas de hasta ${wind} km/h. Mejor lleva una capa exterior y llega con margen.`,
+                icon: "💨",
+                severity: "warning"
+            });
+        }
+    }
+
+    if (currentFlight.gate && currentFlight.gate !== "---") {
+        alerts.push({
+            title: "Puerta suele cerrar 20 min antes",
+            detail: `Tu puerta ${currentFlight.gate} puede cerrar antes del embarque final. No apures la llegada a la zona de embarque.`,
+            icon: "🚪",
+            severity: "warning"
+        });
+    }
+
+    if (country && COUNTRY_TRAVEL_ALERTS[country]) {
+        const advisory = COUNTRY_TRAVEL_ALERTS[country];
+        alerts.push({
+            title: advisory.title,
+            detail: advisory.detail,
+            icon: advisory.icon,
+            severity: advisory.severity
+        });
+    }
+
+    facts.push({
+        title: "Ruta detectada",
+        detail: origin && destination
+            ? `${origin.ciudad} (${currentFlight.origin}) → ${destination.ciudad} (${currentFlight.destination})`
+            : currentFlight.route || "Ruta pendiente"
+    });
+
+    facts.push({
+        title: "Ventana operativa",
+        detail: departureAt
+            ? `Salida estimada ${formatearFechaLarga(flightDate)} a las ${formatTimeLabel(currentFlight.departureTime)}.`
+            : `Vuelo previsto para ${formatearFechaLarga(flightDate)}.`
+    });
+
+    facts.push({
+        title: "Tiempo del destino",
+        detail: weather?.daySummary
+            ? `${city}: ${weather.current.forecast}, ${weather.daySummary.tempMin}°C / ${weather.daySummary.tempMax}°C.`
+            : `Preparando tiempo de ${city}.`
+    });
+
+    facts.push({
+        title: "Embarque recomendado",
+        detail: gateCloseAt
+            ? `Intenta estar en la puerta antes de las ${gateCloseAt.toLocaleTimeString("es-ES", { hour: "2-digit", minute: "2-digit" })}.`
+            : "Si no hay hora detectada, llega a puerta con al menos 20 minutos de margen."
+    });
+
+    while (alerts.length < 3) {
+        alerts.push({
+            title: "Documentación a mano",
+            detail: "Deja localizador, DNI/pasaporte y tarjeta de embarque accesibles antes de salir.",
+            icon: "🧾",
+            severity: "success"
+        });
+    }
+
+    const summary = daysUntil === 1
+        ? `Tu vuelo ${currentFlight.flight} sale mañana. He activado avisos de check-in, clima, puerta y preparación para ${city}.`
+        : `He revisado ${currentFlight.flight} y ya tengo avisos listos de clima, puerta, tiempos y preparación del viaje.`;
+    const confidence = alerts.length >= 4 ? "Asistente activo" : "Seguimiento básico";
+
+    currentFlight.smartInsights = {
+        summary,
+        confidence,
+        tags,
+        alerts,
+        facts
+    };
+
+    renderAssistantState(summary, confidence, tags, alerts.slice(0, 5), facts.slice(0, 4));
+}
+
+function renderUpcomingFlightsList() {
+    const container = document.getElementById("upcomingFlightsList");
+    if (!container) return;
+
+    const flights = getUpcomingFlights()
+        .sort((a, b) => a.date.localeCompare(b.date) || a.flightNumber.localeCompare(b.flightNumber));
+
+    if (!flights.length) {
+        container.innerHTML = '<p>No hay recordatorios guardados todavía.</p>';
+        return;
+    }
+
+    container.innerHTML = flights.map(flight => {
+        const daysUntil = getDaysUntil(flight.date);
+        return `
+            <div class="upcoming-flight-item">
+                <div>
+                    <strong>${flight.flightNumber}</strong>
+                    <small>${getAirlineNameFromFlightNumber(flight.flightNumber)} · ${getAirportLabel(flight.destination)} · ${formatearFechaLarga(flight.date)}</small>
+                    <small>${flight.routeNote || 'Ruta pendiente de completar'}</small>
+                </div>
+                <div class="upcoming-flight-meta">
+                    <span class="upcoming-flight-badge">${getUpcomingFlightBadge(daysUntil)}</span>
+                    <div style="margin-top: 10px;">
+                        <button type="button" class="upcoming-flight-delete" data-delete-upcoming="${flight.id}">Eliminar</button>
+                    </div>
+                </div>
+            </div>
+        `;
+    }).join("");
+
+    container.querySelectorAll("[data-delete-upcoming]").forEach(button => {
+        button.addEventListener("click", () => {
+            deleteUpcomingFlight(button.dataset.deleteUpcoming);
+        });
+    });
+}
+
+function renderPlannerCalendar() {
+    const monthLabel = document.getElementById("plannerMonthLabel");
+    const grid = document.getElementById("plannerCalendarGrid");
+    if (!monthLabel || !grid) return;
+
+    const flights = getUpcomingFlights();
+    const year = plannerCalendarView.getFullYear();
+    const month = plannerCalendarView.getMonth();
+    const firstDay = new Date(year, month, 1);
+    const lastDay = new Date(year, month + 1, 0);
+    const firstWeekday = (firstDay.getDay() + 6) % 7;
+    const totalDays = lastDay.getDate();
+    const todayIso = formatearFechaISO(new Date());
+
+    monthLabel.innerText = plannerCalendarView.toLocaleDateString("es-ES", {
+        month: "long",
+        year: "numeric"
+    });
+
+    const days = [];
+    for (let i = 0; i < firstWeekday; i++) {
+        days.push('<div class="planner-day is-empty"></div>');
+    }
+
+    for (let day = 1; day <= totalDays; day++) {
+        const dateIso = formatearFechaISO(new Date(year, month, day));
+        const count = flights.filter(flight => flight.date === dateIso).length;
+        const classes = [
+            "planner-day",
+            count ? "has-flight" : "",
+            dateIso === todayIso ? "is-today" : ""
+        ].filter(Boolean).join(" ");
+
+        days.push(`
+            <div class="${classes}">
+                <span>${day}</span>
+                ${count ? `<span class="planner-day-count">${count}</span>` : '<span class="planner-day-count" style="visibility:hidden;">0</span>'}
+            </div>
+        `);
+    }
+
+    grid.innerHTML = days.join("");
+}
+
+function renderUpcomingPlanner() {
+    renderUpcomingFlightsList();
+    renderPlannerCalendar();
+}
+
+function saveUpcomingFlightReminder(event) {
+    event.preventDefault();
+
+    const flightNumberInput = document.getElementById("upcomingFlightNumber");
+    const destinationInput = document.getElementById("upcomingFlightDestination");
+    const flightDateInput = document.getElementById("upcomingFlightDate");
+    const routeInput = document.getElementById("upcomingFlightRoute");
+    if (!flightNumberInput || !destinationInput || !flightDateInput || !routeInput) return;
+
+    const flightNumber = normalizeFlightNumber(flightNumberInput.value);
+    const destination = normalizeFlightNumber(destinationInput.value).substring(0, 3);
+    const date = flightDateInput.value;
+    const routeNote = routeInput.value.trim();
+
+    if (!flightNumber || !date || !destination) {
+        updatePlannerStatus("Introduce número de vuelo, destino y fecha para guardar el recordatorio.");
+        return;
+    }
+
+    if (!airportDatabase[destination]) {
+        updatePlannerStatus("El destino IATA no está en la base de datos de aeropuertos.");
+        return;
+    }
+
+    const flights = getUpcomingFlights();
+    const duplicate = flights.find(flight => flight.flightNumber === flightNumber && flight.date === date && flight.destination === destination);
+    if (duplicate) {
+        updatePlannerStatus("Ese vuelo ya estaba guardado para esa fecha.");
+        return;
+    }
+
+    flights.push({
+        id: `${flightNumber}-${date}-${Date.now()}`,
+        flightNumber,
+        destination,
+        date,
+        routeNote
+    });
+
+    saveUpcomingFlights(flights);
+    renderUpcomingPlanner();
+    updateDetailedWeatherWidgets();
+    plannerCalendarView = new Date(new Date(`${date}T00:00:00`).getFullYear(), new Date(`${date}T00:00:00`).getMonth(), 1);
+    renderPlannerCalendar();
+    updatePlannerStatus(`Recordatorio guardado para ${flightNumber} hacia ${getAirportLabel(destination)} el ${formatearFechaLarga(date)}.`);
+    flightNumberInput.value = "";
+    destinationInput.value = "";
+    flightDateInput.value = "";
+    routeInput.value = "";
+}
+
+function deleteUpcomingFlight(id) {
+    const flights = getUpcomingFlights().filter(flight => flight.id !== id);
+    saveUpcomingFlights(flights);
+    renderUpcomingPlanner();
+    updateDetailedWeatherWidgets();
+    updatePlannerStatus("Recordatorio eliminado.");
+}
+
+function formatVisibilityKm(meters) {
+    if (!Number.isFinite(meters)) return "---";
+    return `${(meters / 1000).toFixed(1)} km`;
+}
+
+async function fetchDetailedWeatherForFlight(destinationCode, flightDate) {
+    const cacheKey = `${destinationCode}-${flightDate || "no-date"}`;
+    if (weatherDetailCache.has(cacheKey)) {
+        return weatherDetailCache.get(cacheKey);
+    }
+
+    const destination = airportDatabase[destinationCode];
+    if (!destination) return null;
+
+    const today = inicioDelDia(new Date());
+    const targetDate = flightDate ? inicioDelDia(new Date(`${flightDate}T00:00:00`)) : today;
+    const diffDays = Math.round((targetDate - today) / 86400000);
+
+    const currentUrl = `https://api.open-meteo.com/v1/forecast?latitude=${destination.lat}&longitude=${destination.lng}&current=temperature_2m,relative_humidity_2m,apparent_temperature,weather_code,wind_speed_10m,visibility&timezone=auto`;
+
+    let dailyUrl = "";
+    if (diffDays >= -92 && diffDays <= 16) {
+        const pastDays = Math.max(0, Math.abs(Math.min(diffDays, 0)));
+        const forecastDays = Math.max(1, diffDays >= 0 ? diffDays + 1 : 1);
+        dailyUrl = `https://api.open-meteo.com/v1/forecast?latitude=${destination.lat}&longitude=${destination.lng}&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,relative_humidity_2m_mean,wind_speed_10m_max,visibility_mean&timezone=auto&past_days=${pastDays}&forecast_days=${forecastDays}`;
+    } else if (diffDays < -92) {
+        dailyUrl = `https://archive-api.open-meteo.com/v1/archive?latitude=${destination.lat}&longitude=${destination.lng}&start_date=${flightDate}&end_date=${flightDate}&daily=weather_code,temperature_2m_max,temperature_2m_min,apparent_temperature_max,relative_humidity_2m_mean,wind_speed_10m_max,visibility_mean&timezone=auto`;
+    }
+
+    const requests = [fetch(currentUrl)];
+    if (dailyUrl) requests.push(fetch(dailyUrl));
+
+    const responses = await Promise.all(requests);
+    if (!responses[0].ok) {
+        throw new Error(`Current weather request failed: ${responses[0].status}`);
+    }
+
+    const currentData = await responses[0].json();
+    const dailyData = responses[1] && responses[1].ok ? await responses[1].json() : null;
+
+    let daySummary = null;
+    if (dailyData?.daily?.time?.length) {
+        const index = dailyData.daily.time.findIndex(item => item === flightDate);
+        const resolvedIndex = index >= 0 ? index : 0;
+        daySummary = {
+            weatherCode: dailyData.daily.weather_code?.[resolvedIndex],
+            tempMax: Math.round(dailyData.daily.temperature_2m_max?.[resolvedIndex]),
+            tempMin: Math.round(dailyData.daily.temperature_2m_min?.[resolvedIndex]),
+            apparent: Math.round(dailyData.daily.apparent_temperature_max?.[resolvedIndex]),
+            humidity: Math.round(dailyData.daily.relative_humidity_2m_mean?.[resolvedIndex]),
+            wind: Math.round(dailyData.daily.wind_speed_10m_max?.[resolvedIndex]),
+            visibility: dailyData.daily.visibility_mean?.[resolvedIndex]
+        };
+    }
+
+    const result = {
+        destination,
+        current: {
+            temperature: Math.round(currentData.current?.temperature_2m),
+            apparent: Math.round(currentData.current?.apparent_temperature),
+            humidity: Math.round(currentData.current?.relative_humidity_2m),
+            wind: Math.round(currentData.current?.wind_speed_10m),
+            visibility: currentData.current?.visibility,
+            forecast: codigoClimaATexto(currentData.current?.weather_code)
+        },
+        daySummary
+    };
+
+    weatherDetailCache.set(cacheKey, result);
+    return result;
+}
+
+function renderDetailedWeatherCards(containerId, cards, emptyMessage) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    if (!cards.length) {
+        container.innerHTML = `<p>${emptyMessage}</p>`;
+        return;
+    }
+
+    container.innerHTML = cards.join("");
+}
+
+async function updateDetailedWeatherWidgets() {
+    const upcomingFlights = getUpcomingFlights()
+        .sort((a, b) => a.date.localeCompare(b.date));
+    const uploadedFlights = getUploadedBoardingPasses()
+        .sort((a, b) => (a.flightDate || "").localeCompare(b.flightDate || ""));
+
+    const upcomingCards = await Promise.all(upcomingFlights.map(async flight => {
+        if (!flight.destination || !airportDatabase[flight.destination]) return null;
+        try {
+            const weather = await fetchDetailedWeatherForFlight(flight.destination, flight.date);
+            if (!weather) return null;
+
+            const day = weather.daySummary || {};
+            return `
+                <div class="weather-detailed-card">
+                    <strong>🌤️ Destino: ${weather.destination.ciudad} ${flight.destination}</strong>
+                    <small>${flight.flightNumber} · ${formatearFechaLarga(flight.date)}</small>
+                    <div class="weather-detailed-grid">
+                        <span>Temperatura: ${weather.current.temperature}°C</span>
+                        <span>Sensación: ${weather.current.apparent}°C</span>
+                        <span>Viento: ${weather.current.wind} km/h</span>
+                        <span>Humedad: ${weather.current.humidity}%</span>
+                        <span>Visibilidad: ${formatVisibilityKm(weather.current.visibility)}</span>
+                        <span>Pronóstico: ${weather.current.forecast}</span>
+                        ${Number.isFinite(day.tempMax) ? `<span>Día del vuelo: ${day.tempMin}°C / ${day.tempMax}°C</span>` : ""}
+                        ${Number.isFinite(day.wind) ? `<span>Viento ese día: ${day.wind} km/h</span>` : ""}
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error("❌ Error cargando clima futuro:", error);
+            return `
+                <div class="weather-detailed-card">
+                    <strong>🌤️ Destino: ${getAirportLabel(flight.destination)}</strong>
+                    <small>${flight.flightNumber} · ${formatearFechaLarga(flight.date)}</small>
+                    <div class="weather-detailed-grid">
+                        <span>No se pudo cargar el tiempo.</span>
+                    </div>
+                </div>
+            `;
+        }
+    }));
+
+    const uploadedCards = await Promise.all(uploadedFlights.map(async flight => {
+        if (!flight.destination || !airportDatabase[flight.destination]) return null;
+        try {
+            const weather = await fetchDetailedWeatherForFlight(flight.destination, flight.flightDate);
+            if (!weather) return null;
+
+            const day = weather.daySummary || {};
+            return `
+                <div class="weather-detailed-card">
+                    <strong>🌤️ Destino: ${weather.destination.ciudad} ${flight.destination}</strong>
+                    <small>${flight.flight} · ${flight.route || "Ruta detectada"} · ${flight.date || flight.flightDate}</small>
+                    <div class="weather-detailed-grid">
+                        <span>Temperatura: ${weather.current.temperature}°C</span>
+                        <span>Sensación: ${weather.current.apparent}°C</span>
+                        <span>Viento: ${weather.current.wind} km/h</span>
+                        <span>Humedad: ${weather.current.humidity}%</span>
+                        <span>Visibilidad: ${formatVisibilityKm(weather.current.visibility)}</span>
+                        <span>Pronóstico: ${weather.current.forecast}</span>
+                        ${Number.isFinite(day.tempMax) ? `<span>Día del vuelo: ${day.tempMin}°C / ${day.tempMax}°C</span>` : ""}
+                        ${Number.isFinite(day.apparent) ? `<span>Sensación ese día: ${day.apparent}°C</span>` : ""}
+                    </div>
+                </div>
+            `;
+        } catch (error) {
+            console.error("❌ Error cargando clima de tarjeta:", error);
+            return `
+                <div class="weather-detailed-card">
+                    <strong>🌤️ Destino: ${getAirportLabel(flight.destination)}</strong>
+                    <small>${flight.flight} · ${flight.date || flight.flightDate}</small>
+                    <div class="weather-detailed-grid">
+                        <span>No se pudo cargar el tiempo.</span>
+                    </div>
+                </div>
+            `;
+        }
+    }));
+
+    renderDetailedWeatherCards(
+        "upcomingWeatherList",
+        upcomingCards.filter(Boolean),
+        "No hay próximos vuelos con destino definido."
+    );
+    renderDetailedWeatherCards(
+        "savedFlightsWeatherList",
+        uploadedCards.filter(Boolean),
+        "Todavía no has subido tarjetas de embarque."
+    );
+}
+
+function shuffleArray(items) {
+    const copy = [...items];
+    for (let i = copy.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [copy[i], copy[j]] = [copy[j], copy[i]];
+    }
+    return copy;
+}
+
+function pickRandomAirports(count = 3) {
+    return shuffleArray(Object.entries(airportDatabase)).slice(0, count);
+}
+
+function switchGameTab(gameId) {
+    document.querySelectorAll(".game-tab").forEach(tab => {
+        tab.classList.toggle("is-active", tab.dataset.game === gameId);
+    });
+
+    document.querySelectorAll(".game-screen").forEach(screen => {
+        screen.classList.toggle("is-active", screen.id === `game-${gameId}`);
+    });
+}
+
+function renderOptions(containerId, options, onSelect) {
+    const container = document.getElementById(containerId);
+    if (!container) return;
+
+    container.innerHTML = options.map((option, index) => `
+        <button type="button" class="game-option-btn" data-option-index="${index}">
+            ${option}
+        </button>
+    `).join("");
+
+    container.querySelectorAll(".game-option-btn").forEach(button => {
+        button.addEventListener("click", () => {
+            onSelect(Number(button.dataset.optionIndex));
+        });
+    });
+}
+
+function startRouteGame() {
+    const airports = pickRandomAirports(3);
+    const correct = airports[0];
+    const alternatives = pickRandomAirports(3)
+        .filter(item => item[0] !== correct[0])
+        .slice(0, 2);
+    const options = shuffleArray([
+        `${correct[1].ciudad} (${correct[0]})`,
+        ...alternatives.map(item => `${item[1].ciudad} (${item[0]})`)
+    ]);
+
+    currentRouteGame = {
+        answer: `${correct[1].ciudad} (${correct[0]})`
+    };
+
+    setText("routeGameQuestion", `¿Qué destino encaja mejor para una ruta que sale de ${correct[1].pais} y apunta a ${correct[1].ciudad}?`);
+    setText("routeGameResult", "Selecciona una opción.");
+    renderOptions("routeGameOptions", options, index => {
+        const selected = options[index];
+        const ok = selected === currentRouteGame.answer;
+        setText("routeGameResult", ok ? `Correcto: era ${currentRouteGame.answer}.` : `Casi. La respuesta correcta era ${currentRouteGame.answer}.`);
+    });
+}
+
+function startQuizGame() {
+    currentQuizGame = aviationQuizQuestions[Math.floor(Math.random() * aviationQuizQuestions.length)];
+    setText("quizGameQuestion", currentQuizGame.question);
+    setText("quizGameResult", "Elige una respuesta.");
+    renderOptions("quizGameOptions", currentQuizGame.options, index => {
+        const ok = index === currentQuizGame.correct;
+        setText("quizGameResult", ok ? "Respuesta correcta." : `Incorrecto. La correcta era: ${currentQuizGame.options[currentQuizGame.correct]}.`);
+    });
+}
+
+function startAirportGame() {
+    const [code, airport] = pickRandomAirports(1)[0];
+    const countries = shuffleArray([
+        airport.pais,
+        ...shuffleArray(Object.values(airportDatabase).map(item => item.pais).filter(pais => pais !== airport.pais)).slice(0, 2)
+    ]).slice(0, 3);
+
+    currentAirportGame = { answer: airport.pais };
+    setText("airportGameQuestion", `¿En qué país está el aeropuerto ${airport.nombre} (${code})?`);
+    setText("airportGameResult", "Selecciona un país.");
+    renderOptions("airportGameOptions", countries, index => {
+        const selected = countries[index];
+        const ok = selected === currentAirportGame.answer;
+        setText("airportGameResult", ok ? `Correcto: ${airport.nombre} está en ${currentAirportGame.answer}.` : `No exactamente. Está en ${currentAirportGame.answer}.`);
+    });
+}
+
+function startDistanceGame() {
+    const selected = pickRandomAirports(2);
+    const [originCode, origin] = selected[0];
+    const [destinationCode, destination] = selected[1];
+    const realDistance = Math.round(calcularDistancia(origin.lat, origin.lng, destination.lat, destination.lng));
+
+    currentDistanceGame = {
+        realDistance,
+        routeLabel: `${originCode} → ${destinationCode}`
+    };
+
+    setText("distanceGameQuestion", `Estima la distancia entre ${origin.ciudad} (${originCode}) y ${destination.ciudad} (${destinationCode}).`);
+    setText("distanceGameResult", "Introduce tu estimación y pulsa comprobar.");
+    const input = document.getElementById("distanceGuessInput");
+    if (input) input.value = "";
+}
+
+function checkDistanceGame() {
+    const input = document.getElementById("distanceGuessInput");
+    if (!input || !currentDistanceGame) return;
+
+    const guess = Number(input.value);
+    if (!Number.isFinite(guess) || guess < 0) {
+        setText("distanceGameResult", "Introduce una distancia válida en kilómetros.");
+        return;
+    }
+
+    const diff = Math.abs(guess - currentDistanceGame.realDistance);
+    setText(
+        "distanceGameResult",
+        `Ruta ${currentDistanceGame.routeLabel}: distancia real ${currentDistanceGame.realDistance} km. Te has desviado ${diff} km.`
+    );
+}
+
+function setupPaintGame() {
+    const wing = document.getElementById("paintPlaneWing");
+    const body = document.getElementById("paintPlaneBody");
+    const tail = document.getElementById("paintPlaneTail");
+
+    document.querySelectorAll(".paint-btn").forEach(button => {
+        button.addEventListener("click", () => {
+            const color = button.dataset.color;
+            if (wing) wing.setAttribute("fill", color);
+            if (tail) tail.setAttribute("fill", color);
+            if (body) body.setAttribute("fill", color === "#dfe8ef" ? "#dfe8ef" : "#f4f8fb");
+            setText("paintGameResult", `Avión repintado en ${button.innerText.toLowerCase()}.`);
+        });
+    });
+}
+
+function actualizarChecklistVuelo() {
+    setText("checklistSeat", currentFlight.seat || "---");
+    setText("checklistGate", currentFlight.gate || "---");
+    setText("checklistGroup", currentFlight.boardingGroup || "---");
+
+    setChecklistItem("taskBoardingScan", !!currentFlight.rawText);
+    setChecklistItem("taskSeatAssigned", !!currentFlight.seat && currentFlight.seat !== "---");
+    setChecklistItem("taskGateAssigned", !!currentFlight.gate && currentFlight.gate !== "---");
+    setChecklistItem("taskGroupAssigned", !!currentFlight.boardingGroup && currentFlight.boardingGroup !== "---");
+}
+
+function setChecklistItem(id, checked) {
+    const checkbox = document.getElementById(id);
+    if (!checkbox) return;
+
+    checkbox.checked = checked;
+    const item = checkbox.closest(".checklist-item");
+    if (item) {
+        item.classList.toggle("is-complete", checked);
+    }
+}
+
+function syncChecklistStyles() {
+    checklistIds.forEach(id => {
+        const checkbox = document.getElementById(id);
+        if (!checkbox) return;
+
+        const item = checkbox.closest(".checklist-item");
+        if (item) {
+            item.classList.toggle("is-complete", checkbox.checked);
+        }
+    });
+}
+
+function mostrarEstadoCarga(mostrar) {
+    const loader = document.getElementById('loadingIndicator');
+    if (mostrar) {
+        if (!loader) {
+            const div = document.createElement('div');
+            div.id = 'loadingIndicator';
+            div.className = 'loading-overlay';
+            div.innerHTML = '<div class="loading-spinner"></div><p>Procesando...</p>';
+            document.body.appendChild(div);
+        }
+    } else {
+        if (loader) loader.remove();
+    }
+}
+
+function mostrarNotificacion(mensaje, tipo = 'info') {
+    const notif = document.createElement('div');
+    notif.className = `notification notification-${tipo}`;
+    notif.textContent = mensaje;
+    notif.style.cssText = `
+        position: fixed;
+        top: 20px;
+        right: 20px;
+        padding: 15px 20px;
+        background: ${tipo === 'success' ? '#33d18b' : tipo === 'error' ? '#ea4335' : '#2f80ed'};
+        color: white;
+        border-radius: 8px;
+        box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        z-index: 9999;
+        animation: slideIn 0.3s ease;
+    `;
+    
+    document.body.appendChild(notif);
+    
+    setTimeout(() => {
+        notif.style.animation = 'slideOut 0.3s ease';
+        setTimeout(() => notif.remove(), 300);
+    }, 3000);
+}
+
+function getAudioContext() {
+    if (!audioContext) {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        if (!AudioCtx) {
+            throw new Error("AudioContext no soportado");
+        }
+
+        audioContext = new AudioCtx();
+    }
+
+    if (audioContext.state === "suspended") {
+        audioContext.resume();
+    }
+
+    return audioContext;
+}
+
+function registerOscillator(oscillator, gainNode) {
+    activeOscillators.push(oscillator);
+    if (gainNode) activeGainNodes.push(gainNode);
+    oscillator.onended = () => {
+        activeOscillators = activeOscillators.filter(item => item !== oscillator);
+        if (gainNode) {
+            activeGainNodes = activeGainNodes.filter(item => item !== gainNode);
+        }
+    };
+}
+
+function playToneSequence(tones) {
+    const ctx = getAudioContext();
+    let currentTime = ctx.currentTime;
+
+    tones.forEach(tone => {
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+
+        oscillator.type = tone.type || "sine";
+        oscillator.frequency.setValueAtTime(tone.frequency, currentTime);
+        gainNode.gain.setValueAtTime(0.0001, currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(tone.volume || 0.08, currentTime + 0.01);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, currentTime + tone.duration);
+
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscillator.start(currentTime);
+        oscillator.stop(currentTime + tone.duration + 0.02);
+        registerOscillator(oscillator, gainNode);
+
+        currentTime += tone.gap !== undefined ? tone.gap : tone.duration;
+    });
+}
+
+function createNoiseBuffer(ctx, duration = 2) {
+    const buffer = ctx.createBuffer(1, ctx.sampleRate * duration, ctx.sampleRate);
+    const data = buffer.getChannelData(0);
+
+    for (let i = 0; i < data.length; i++) {
+        data[i] = (Math.random() * 2 - 1) * 0.35;
+    }
+
+    return buffer;
+}
+
+function stopAllSounds() {
+    if (cabinInterval) {
+        clearInterval(cabinInterval);
+        cabinInterval = null;
+    }
+
+    activeOscillators.forEach(oscillator => {
+        try {
+            oscillator.stop();
+        } catch (error) {
+            console.debug("Oscillator already stopped", error);
+        }
+    });
+
+    activeGainNodes.forEach(gainNode => {
+        try {
+            gainNode.disconnect();
+        } catch (error) {
+            console.debug("Gain already disconnected", error);
+        }
+    });
+
+    noiseNodes.forEach(node => {
+        try {
+            node.source.stop();
+            node.source.disconnect();
+            node.filter.disconnect();
+            node.gain.disconnect();
+        } catch (error) {
+            console.debug("Noise node already stopped", error);
+        }
+    });
+
+    noiseNodes = [];
+    activeOscillators = [];
+    activeGainNodes = [];
+
+    if (window.speechSynthesis) {
+        window.speechSynthesis.cancel();
+    }
+
+    updateSoundStatus("Sonido detenido.");
+}
+
+function updateSoundStatus(text) {
+    const status = document.getElementById("soundStatus");
+    if (status) {
+        status.innerText = text;
+    }
+}
+
+function playSeatbeltDing() {
+    stopAllSounds();
+    playToneSequence([
+        { frequency: 1046, duration: 0.22, gap: 0.26, volume: 0.07, type: "sine" },
+        { frequency: 1318, duration: 0.28, gap: 0.28, volume: 0.08, type: "sine" }
+    ]);
+    updateSoundStatus("Reproduciendo: Ding del cinturón.");
+}
+
+function playCaptainAnnouncement() {
+    stopAllSounds();
+    updateSoundStatus("Reproduciendo: Anuncio del capitán.");
+
+    if (window.speechSynthesis) {
+        const utterance = new SpeechSynthesisUtterance(
+            "Tripulación, arm doors and cross check. Señores pasajeros, por favor permanezcan sentados con el cinturón abrochado."
+        );
+        utterance.lang = "es-ES";
+        utterance.rate = 0.95;
+        utterance.pitch = 0.9;
+        window.speechSynthesis.cancel();
+        window.speechSynthesis.speak(utterance);
+    } else {
+        playToneSequence([
+            { frequency: 220, duration: 0.2, gap: 0.25, volume: 0.06, type: "square" },
+            { frequency: 196, duration: 0.24, gap: 0.3, volume: 0.06, type: "square" },
+            { frequency: 247, duration: 0.4, gap: 0.4, volume: 0.05, type: "triangle" }
+        ]);
+    }
+}
+
+function playTakeoffLanding() {
+    stopAllSounds();
+    const ctx = getAudioContext();
+    const oscillator = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+
+    oscillator.type = "sawtooth";
+    oscillator.frequency.setValueAtTime(80, ctx.currentTime);
+    oscillator.frequency.exponentialRampToValueAtTime(220, ctx.currentTime + 3.5);
+    gainNode.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.06, ctx.currentTime + 0.4);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 3.7);
+
+    oscillator.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    oscillator.start();
+    oscillator.stop(ctx.currentTime + 3.8);
+    registerOscillator(oscillator, gainNode);
+    updateSoundStatus("Reproduciendo: Sonido de despegue / aterrizaje.");
+}
+
+function playTurbulence() {
+    stopAllSounds();
+    const ctx = getAudioContext();
+    const source = ctx.createBufferSource();
+    const filter = ctx.createBiquadFilter();
+    const gainNode = ctx.createGain();
+
+    source.buffer = createNoiseBuffer(ctx, 2.4);
+    filter.type = "bandpass";
+    filter.frequency.setValueAtTime(90, ctx.currentTime);
+    filter.Q.value = 0.8;
+    gainNode.gain.setValueAtTime(0.0001, ctx.currentTime);
+    gainNode.gain.exponentialRampToValueAtTime(0.08, ctx.currentTime + 0.2);
+    gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 2.2);
+
+    source.connect(filter);
+    filter.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    source.start();
+    source.stop(ctx.currentTime + 2.25);
+    noiseNodes.push({ source, filter, gain: gainNode });
+    updateSoundStatus("Reproduciendo: Turbulencia suave.");
+}
+
+function playCabinAmbience() {
+    stopAllSounds();
+    const ctx = getAudioContext();
+
+    const baseDrone = () => {
+        const oscillator = ctx.createOscillator();
+        const gainNode = ctx.createGain();
+        oscillator.type = "triangle";
+        oscillator.frequency.setValueAtTime(180, ctx.currentTime);
+        gainNode.gain.setValueAtTime(0.0001, ctx.currentTime);
+        gainNode.gain.exponentialRampToValueAtTime(0.03, ctx.currentTime + 0.6);
+        gainNode.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 5.5);
+        oscillator.connect(gainNode);
+        gainNode.connect(ctx.destination);
+        oscillator.start();
+        oscillator.stop(ctx.currentTime + 5.6);
+        registerOscillator(oscillator, gainNode);
+    };
+
+    baseDrone();
+    cabinInterval = setInterval(baseDrone, 4200);
+    updateSoundStatus("Reproduciendo: Música ambiente de cabina.");
+}
+
+function reproducirSonido(tipo) {
+    try {
+        switch (tipo) {
+            case "seatbelt":
+                playSeatbeltDing();
+                break;
+            case "captain":
+                playCaptainAnnouncement();
+                break;
+            case "takeoff":
+                playTakeoffLanding();
+                break;
+            case "turbulence":
+                playTurbulence();
+                break;
+            case "cabin":
+                playCabinAmbience();
+                break;
+            default:
+                updateSoundStatus("Sonido no reconocido.");
+        }
+    } catch (error) {
+        console.error("❌ Error de audio:", error);
+        updateSoundStatus("No se pudo reproducir el sonido en este navegador.");
+    }
+}
+
+function cargarVueloDemo() {
+    const tomorrow = sumarDias(inicioDelDia(new Date()), 1);
+    currentFlight = {
+        flight: "VY8432",
+        route: "MAD → MXP",
+        origin: "MAD",
+        destination: "MXP",
+        seat: "23A",
+        gate: "B12",
+        boardingGroup: "3",
+        departureTime: "19:40",
+        boardingTime: "19:05",
+        rawText: "DEMO BOARDING PASS",
+        date: tomorrow.toLocaleDateString(),
+        flightDate: formatearFechaISO(tomorrow),
+        packingChecklist: getDefaultPackingChecklist(),
+        conversionRate: 1,
+        conversionUpdatedAt: new Date().toISOString()
+    };
+    
+    actualizarPantalla();
+    mostrarNotificacion('🎮 Vuelo de demostración cargado', 'info');
+}
+
+// ==========================================
+// GUARDAR Y CARGAR HISTORIAL
+// ==========================================
+function saveFlight() {
+    if (!currentFlight.flight || currentFlight.flight === "---") {
+        mostrarNotificacion('No hay vuelo para guardar', 'warning');
+        return;
+    }
+    
+    ensureFlightPackingList();
+    updateConversionSummary();
+    
+    let history = JSON.parse(localStorage.getItem("flights")) || [];
+    
+    // Añadir timestamp
+    currentFlight.savedAt = new Date().toISOString();
+    history.push(currentFlight);
+    
+    // Mantener solo últimos 50 vuelos
+    if (history.length > 50) history = history.slice(-50);
+    
+    localStorage.setItem("flights", JSON.stringify(history));
+    loadHistory();
+    updateStats();
+    updateAirportsHistory();
+    updatePassportStamps();
+    updateDetailedWeatherWidgets();
+    
+    mostrarNotificacion('✅ Vuelo guardado en el Logbook', 'success');
+}
+
+function loadHistory() {
+    let history = JSON.parse(localStorage.getItem("flights")) || [];
+    let html = "";
+    
+    if (history.length === 0) {
+        html = '<p>📭 No hay vuelos guardados</p>';
+    } else {
+        history.slice(-10).reverse().forEach((f, index) => {
+            const fecha = f.date || 'Fecha desconocida';
+            const ruta = f.route || 'Ruta no disponible';
+            const asiento = f.seat || '---';
+            
+            html += `
+                <div class="history-item" onclick="cargarVueloGuardado(${history.length - 1 - index})">
+                    <div class="history-header">
+                        <strong>✈️ ${f.flight}</strong>
+                        <span>${fecha}</span>
+                    </div>
+                    <div class="history-details">
+                        <span>📍 ${ruta}</span>
+                        <span>💺 Asiento ${asiento}</span>
+                    </div>
+                </div>
+            `;
+        });
+    }
+    
+    document.getElementById("historyList").innerHTML = html;
+}
+
+function cargarVueloGuardado(index) {
+    const history = JSON.parse(localStorage.getItem("flights")) || [];
+    if (history[index]) {
+        currentFlight = history[index];
+        currentFlight.flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
+        actualizarPantalla();
+        mostrarNotificacion(`📂 Vuelo ${currentFlight.flight} cargado`, 'info');
+    }
+}
+
+// ==========================================
+// EVENT LISTENERS
+// ==========================================
+document.addEventListener('DOMContentLoaded', function() {
+    // Inicializar mapa
+    inicializarMapa();
+    
+    // Cargar historial
+    loadHistory();
+    updateStats();
+    updateAirportsHistory();
+    renderUpcomingPlanner();
+    updatePassportStamps();
+    updateDetailedWeatherWidgets();
+    renderDefaultAssistantState();
+    
+    // Botón de guardar
+    const saveBtn = document.getElementById('saveFlightBtn');
+    if (saveBtn) {
+        saveBtn.addEventListener('click', saveFlight);
+    }
+
+    const upcomingFlightForm = document.getElementById("upcomingFlightForm");
+    if (upcomingFlightForm) {
+        upcomingFlightForm.addEventListener("submit", saveUpcomingFlightReminder);
+    }
+
+    const prevPlannerMonthBtn = document.getElementById("prevPlannerMonthBtn");
+    if (prevPlannerMonthBtn) {
+        prevPlannerMonthBtn.addEventListener("click", () => {
+            plannerCalendarView = new Date(plannerCalendarView.getFullYear(), plannerCalendarView.getMonth() - 1, 1);
+            renderPlannerCalendar();
+        });
+    }
+
+    const nextPlannerMonthBtn = document.getElementById("nextPlannerMonthBtn");
+    if (nextPlannerMonthBtn) {
+        nextPlannerMonthBtn.addEventListener("click", () => {
+            plannerCalendarView = new Date(plannerCalendarView.getFullYear(), plannerCalendarView.getMonth() + 1, 1);
+            renderPlannerCalendar();
+        });
+    }
+
+    checklistIds.forEach(id => {
+        const checkbox = document.getElementById(id);
+        if (checkbox && !checkbox.disabled) {
+            checkbox.addEventListener('change', syncChecklistStyles);
+        }
+    });
+    
+    // Botones del mapa
+    const animateBtn = document.getElementById('animateFlightBtn');
+    if (animateBtn) {
+        animateBtn.addEventListener('click', animarVuelo);
+    }
+    
+    const resetBtn = document.getElementById('resetFlightBtn');
+    if (resetBtn) {
+        resetBtn.addEventListener('click', resetearMapa);
+    }
+
+    // Botones de velocidad
+    const speedButtons = ['speedRealTime', 'speed2x', 'speed4x', 'speed8x'];
+    speedButtons.forEach((id, index) => {
+        const btn = document.getElementById(id);
+        if (btn) {
+            btn.addEventListener('click', () => {
+                speedMultiplier = [1, 2, 4, 8][index];
+                // Actualizar clase active
+                speedButtons.forEach(otherId => {
+                    document.getElementById(otherId).classList.remove('active');
+                });
+                btn.classList.add('active');
+            });
+        }
+    });
+
+    document.querySelectorAll('.sound-btn[data-sound]').forEach(button => {
+        button.addEventListener('click', () => {
+            reproducirSonido(button.dataset.sound);
+        });
+    });
+
+    const stopAudioBtn = document.getElementById('stopAudioBtn');
+    if (stopAudioBtn) {
+        stopAudioBtn.addEventListener('click', stopAllSounds);
+    }
+
+    const packingItemsList = document.getElementById('packingItemsList');
+    if (packingItemsList) {
+        packingItemsList.addEventListener('click', handlePackingListClick);
+    }
+
+    const togglePackingInputBtn = document.getElementById('togglePackingInputBtn');
+    if (togglePackingInputBtn) {
+        togglePackingInputBtn.addEventListener('click', () => togglePackingAddRow(true));
+    }
+
+    const addPackingItemButton = document.getElementById('addPackingItemButton');
+    if (addPackingItemButton) {
+        addPackingItemButton.addEventListener('click', () => {
+            const input = document.getElementById('newPackingItemInput');
+            if (input && input.value.trim()) {
+                addPackingChecklistItem(input.value);
+                input.value = '';
+            }
+        });
+    }
+
+    const newPackingItemInput = document.getElementById('newPackingItemInput');
+    if (newPackingItemInput) {
+        newPackingItemInput.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                addPackingItemButton?.click();
+            }
+        });
+    }
+
+    const updateConversionBtn = document.getElementById('updateConversionBtn');
+    if (updateConversionBtn) {
+        updateConversionBtn.addEventListener('click', updateConversionSummary);
+    }
+
+    togglePackingAddRow(false);
+    ensureFlightPackingList();
+    renderPackingChecklist();
+    updateConversionSummary();
+
+    document.querySelectorAll(".game-tab").forEach(tab => {
+        tab.addEventListener("click", () => switchGameTab(tab.dataset.game));
+    });
+
+    const startRouteGameBtn = document.getElementById("startRouteGameBtn");
+    if (startRouteGameBtn) {
+        startRouteGameBtn.addEventListener("click", startRouteGame);
+    }
+
+    const startQuizGameBtn = document.getElementById("startQuizGameBtn");
+    if (startQuizGameBtn) {
+        startQuizGameBtn.addEventListener("click", startQuizGame);
+    }
+
+    const startAirportGameBtn = document.getElementById("startAirportGameBtn");
+    if (startAirportGameBtn) {
+        startAirportGameBtn.addEventListener("click", startAirportGame);
+    }
+
+    const startDistanceGameBtn = document.getElementById("startDistanceGameBtn");
+    if (startDistanceGameBtn) {
+        startDistanceGameBtn.addEventListener("click", startDistanceGame);
+    }
+
+    const checkDistanceGameBtn = document.getElementById("checkDistanceGameBtn");
+    if (checkDistanceGameBtn) {
+        checkDistanceGameBtn.addEventListener("click", checkDistanceGame);
+    }
+
+    setupPaintGame();
+    startRouteGame();
+    startQuizGame();
+    startAirportGame();
+    startDistanceGame();
+    
+    // Transporte terrestre
+    const calculateTransportBtn = document.getElementById('calculateTransportBtn');
+    if (calculateTransportBtn) {
+        calculateTransportBtn.addEventListener('click', calcularTransporteTerrestre);
+    }
+
+    // Planificación de llegada
+    const calculateDepartureBtn = document.getElementById('calculateDepartureBtn');
+    if (calculateDepartureBtn) {
+        calculateDepartureBtn.addEventListener('click', calcularHoraSalida);
+    }
+
+    const useFlightTimeCheckbox = document.getElementById('useFlightTime');
+    if (useFlightTimeCheckbox) {
+        useFlightTimeCheckbox.addEventListener('change', function() {
+            const manualFields = document.querySelector('.arrival-fields');
+            manualFields.style.display = this.checked ? 'none' : 'grid';
+        });
+    }
+
+    const arrivalDaySelect = document.getElementById('arrivalDay');
+    if (arrivalDaySelect) {
+        arrivalDaySelect.addEventListener('change', function() {
+            const customDateInput = document.getElementById('customArrivalDate');
+            customDateInput.style.display = this.value === 'custom' ? 'block' : 'none';
+        });
+    }
+
+    // Gastos del viaje
+    const addExpenseBtn = document.getElementById('addExpenseBtn');
+    if (addExpenseBtn) {
+        addExpenseBtn.addEventListener('click', añadirGasto);
+    }
+
+    // Cargar gastos guardados
+    cargarGastos();
+    
+    // Inicializar estado de planificación de llegada
+    if (useFlightTimeCheckbox && useFlightTimeCheckbox.checked) {
+        document.querySelector('.arrival-fields').style.display = 'none';
+    }
+    
+    // Cargar vuelo demo después de 1 segundo
+    setTimeout(() => {
+        if (!currentFlight.flight || currentFlight.flight === "---") {
+            cargarVueloDemo();
+        }
+    }, 1000);
+    
+    console.log('🚀 Sistema de Cockpit de Vuelo inicializado');
+    syncChecklistStyles();
+});
+
+// ==========================================
+// ESTILOS ADICIONALES PARA NOTIFICACIONES
+// ==========================================
+const style = document.createElement('style');
+style.textContent = `
+    @keyframes slideIn {
+        from { transform: translateX(100%); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+    }
+    
+    @keyframes slideOut {
+        from { transform: translateX(0); opacity: 1; }
+        to { transform: translateX(100%); opacity: 0; }
+    }
+    
+    .loading-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(6, 21, 24, 0.9);
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        z-index: 9998;
+        backdrop-filter: blur(5px);
+    }
+    
+    .loading-spinner {
+        width: 50px;
+        height: 50px;
+        border: 3px solid rgba(51, 209, 139, 0.3);
+        border-top-color: var(--accent);
+        border-radius: 50%;
+        animation: spin 1s linear infinite;
+    }
+    
+    @keyframes spin {
+        to { transform: rotate(360deg); }
+    }
+    
+    .history-item {
+        background: rgba(15, 25, 34, 0.5);
+        padding: 12px;
+        margin: 8px 0;
+        border-radius: 10px;
+        border-left: 4px solid var(--accent);
+        cursor: pointer;
+        transition: all 0.3s ease;
+    }
+    
+    .history-item:hover {
+        background: rgba(20, 35, 45, 0.7);
+        transform: translateX(5px);
+    }
+    
+    .history-header {
+        display: flex;
+        justify-content: space-between;
+        margin-bottom: 8px;
+    }
+    
+    .history-header strong {
+        color: var(--accent);
+    }
+    
+    .history-details {
+        display: flex;
+        gap: 15px;
+        color: var(--text-soft);
+        font-size: 0.9rem;
+    }
+    
+    .flight-route-line {
+        filter: drop-shadow(0 0 8px rgba(47, 128, 237, 0.5));
+    }
+    
+    .airport-icon {
+        filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.3));
+    }
+`;
+document.head.appendChild(style);
+
+// Exponer funciones globales
+window.saveFlight = saveFlight;
+window.cargarVueloGuardado = cargarVueloGuardado;
+
+if ("serviceworker" in navigator) {
+    navigator.servideworker.register("/service-worker.js")
+        .then(() => console.log("Offline mode active"));
+}

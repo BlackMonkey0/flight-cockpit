@@ -1,0 +1,527 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="Flight Cockpit Logbook para escanear tarjetas de embarque, visualizar rutas y guardar vuelos.">
+  <title>Flight Cockpit Logbook</title>
+  <link rel="stylesheet" href="style.css">
+  <link
+    rel="stylesheet"
+    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+    integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
+    crossorigin=""
+    <link rel="manifest" href="manifest.json">
+<meta name="theme-color" content="#52a8ff">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>  <!-- Google Maps API - Replace YOUR_API_KEY with actual key -->
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=places,geometry"></script></head>
+</head>
+
+<body>
+  <header>
+    <h1>✈ FLIGHT COCKPIT</h1>
+    <p>Electronic Personal Flight Bag</p>
+  </header>
+
+  <main>
+    <section class="panel" aria-label="Panel principal del vuelo">
+      <div class="upload-box">
+        <label for="imageInput">Selecciona una tarjeta de embarque</label>
+        <input type="file" id="imageInput" accept="image/*">
+      </div>
+
+      <div class="flight-data">
+        <h2>BOARDING DATA</h2>
+        <p id="flight">Flight: ---</p>
+        <p id="route">Route: ---</p>
+        <p id="seat">Seat: ---</p>
+        <p id="date">Date: ---</p>
+      </div>
+
+      <div class="systems">
+        <h2>FLIGHT SYSTEMS</h2>
+        <p id="airline">Airline: ---</p>
+        <p id="aircraft">Aircraft: ---</p>
+        <p id="duration">Duration: ---</p>
+        <p id="distance">Distance: ---</p>
+        <p id="weather">Weather: ---</p>
+        <div id="weatherHistory" class="weather-history" aria-live="polite"></div>
+        <p id="timezone">Local Time: ---</p>
+      </div>
+
+      <div class="assistant-panel" aria-live="polite">
+        <div class="assistant-hero">
+          <div>
+            <span class="assistant-kicker">Inteligencia Automática</span>
+            <h2>Tu asistente real de vuelo</h2>
+            <p id="assistantSummary">Escanea una tarjeta y te avisaré de check-in, clima, puerta, documentos y señales del destino.</p>
+          </div>
+          <div class="assistant-score">
+            <small>Estado del viaje</small>
+            <strong id="assistantConfidence">Esperando vuelo</strong>
+          </div>
+        </div>
+
+        <div id="assistantTags" class="assistant-tags">
+          <span class="assistant-tag">Sin vuelo cargado</span>
+        </div>
+
+        <div class="assistant-grid">
+          <div class="assistant-card">
+            <h3>Alertas activas</h3>
+            <div id="assistantAlerts" class="assistant-alerts">
+              <div class="assistant-empty">Aquí aparecerán avisos útiles al escanear un vuelo.</div>
+            </div>
+          </div>
+
+          <div class="assistant-card">
+            <h3>Preparación rápida</h3>
+            <div id="assistantFacts" class="assistant-facts">
+              <div class="assistant-fact">
+                <strong>Sin datos todavía</strong>
+                <span>Necesito una ruta para personalizar el viaje.</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="checklist">
+        <h2>TRAVEL CHECKLIST</h2>
+        <div class="checklist-list">
+          <label class="checklist-item">
+            <input type="checkbox" id="taskBaggageReady">
+            <span>Equipaje realizado</span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskCheckinDone">
+            <span>Check-in completado</span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskBoardingScan" disabled>
+            <span>Tarjeta de embarque escaneada</span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskSeatAssigned" disabled>
+            <span>Asiento asignado: <strong id="checklistSeat">---</strong></span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskGateAssigned" disabled>
+            <span>Puerta de embarque: <strong id="checklistGate">---</strong></span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskGroupAssigned" disabled>
+            <span>Grupo de embarque: <strong id="checklistGroup">---</strong></span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskCheckedBag">
+            <span>Equipaje facturado</span>
+          </label>
+          <label class="checklist-item">
+            <input type="checkbox" id="taskDocsReady">
+            <span>Documentación lista</span>
+          </label>
+        </div>
+
+        <div class="travel-widgets">
+          <div class="seat-widget">
+            <div class="panel-head">
+              <h3>Recomendador de asiento</h3>
+              <span class="seat-note">Según tus gustos: Prefieres ventana y ala.</span>
+            </div>
+            <p id="seatRecommendationText" class="seat-recommendation-text">Para A320: 17A recomendado</p>
+            <p class="seat-helper">Cada vez que cargues un vuelo, se sugiere el mejor asiento para tu avión.</p>
+          </div>
+
+          <div class="passport-widget">
+            <div class="panel-head">
+              <h3>Pasaporte digital</h3>
+              <span id="passportStampCount" class="passport-badge">0 sellos</span>
+            </div>
+            <div id="passportStampsList" class="passport-stamps"></div>
+          </div>
+        </div>
+
+        <div class="travel-widgets">
+          <div class="packing-widget">
+            <div class="panel-head">
+              <h3>Packing List Inteligente</h3>
+              <button type="button" id="togglePackingInputBtn" class="small-btn">+ Añadir más cosas</button>
+            </div>
+            <div id="packingItemsList" class="packing-items-list"></div>
+            <div class="packing-add-row" id="packingAddRow">
+              <input type="text" id="newPackingItemInput" placeholder="Escribe un ítem nuevo">
+              <button type="button" id="addPackingItemButton">Añadir</button>
+            </div>
+          </div>
+
+          <div class="converter-widget">
+            <div class="panel-head">
+              <h3>Conversor de Moneda y Medidas</h3>
+              <button type="button" id="updateConversionBtn" class="small-btn">💰 Actualizar tasas</button>
+            </div>
+            <div id="conversionSummary" class="conversion-summary"></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="soundboard">
+        <h2>EFECTOS DE SONIDO</h2>
+        <p class="soundboard-intro">Sonidos disponibles para reproducir manualmente durante cada fase del vuelo.</p>
+        <div class="soundboard-list">
+          <button type="button" class="sound-btn" data-sound="seatbelt">🔔 Ding del cinturón</button>
+          <button type="button" class="sound-btn" data-sound="captain">🎙️ Anuncio de capitán</button>
+          <button type="button" class="sound-btn" data-sound="takeoff">🛫 Despegue / Aterrizaje</button>
+          <button type="button" class="sound-btn" data-sound="turbulence">🌫️ Turbulencia suave</button>
+          <button type="button" class="sound-btn" data-sound="cabin">🎵 Música ambiente de cabina</button>
+          <button type="button" class="sound-btn sound-btn-stop" id="stopAudioBtn">⏹️ Detener sonido</button>
+        </div>
+        <p id="soundStatus" class="sound-status" aria-live="polite">Listo para reproducir sonidos.</p>
+      </div>
+
+      <div class="controls">
+        <button type="button" id="saveFlightBtn">Guardar vuelo</button>
+      </div>
+
+      <div class="cockpit-map">
+        <h2>FLIGHT MAP</h2>
+        <div id="leafletMap" aria-label="Mapa interactivo del vuelo"></div>
+
+        <div class="map-controls">
+          <button type="button" id="animateFlightBtn">▶ Animar vuelo</button>
+          <button type="button" id="resetFlightBtn">⟲ Reiniciar ruta</button>
+          <div class="speed-controls">
+            <label>Velocidad:</label>
+            <button type="button" id="speedRealTime" class="speed-btn active">Tiempo real</button>
+            <button type="button" id="speed2x" class="speed-btn">2x</button>
+            <button type="button" id="speed4x" class="speed-btn">4x</button>
+            <button type="button" id="speed8x" class="speed-btn">8x</button>
+          </div>
+          <span id="flightPathText">Ruta: Madrid (MAD) → Milán (MXP)</span>
+        </div>
+
+        <div class="flight-stats" aria-label="Estadísticas del vuelo">
+          <div>
+            <small>Distancia</small>
+            <strong id="distanceDisplay">1,152 km</strong>
+          </div>
+          <div>
+            <small>Duración est.</small>
+            <strong id="durationDisplay">2h 15m</strong>
+          </div>
+          <div>
+            <small>Altitud crucero</small>
+            <strong>36,000 ft</strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="ground-transport" aria-label="Transporte terrestre">
+      <h2>GROUND TRANSPORT</h2>
+      <div class="transport-options">
+        <div class="transport-input">
+          <div class="address-fields">
+            <div>
+              <label for="homeAddress">Dirección de origen:</label>
+              <input type="text" id="homeAddress" placeholder="Ingresa tu dirección de origen">
+            </div>
+            <div>
+              <label for="destinationAddress">Dirección de destino:</label>
+              <input type="text" id="destinationAddress" placeholder="Aeropuerto de destino">
+            </div>
+          </div>
+          
+          <div class="transport-modes">
+            <label for="transportModeSelect">Tipo de transporte:</label>
+            <select id="transportModeSelect" name="transportMode">
+              <option value="driving">🚗 Coche privado</option>
+              <option value="taxi">🚕 Taxi</option>
+              <option value="uber">🚗 Uber</option>
+              <option value="cabify">🚙 Cabify</option>
+              <option value="transit">🚌 Transporte público</option>
+              <option value="train">🚂 Tren</option>
+              <option value="subway">🚇 Metro</option>
+              <option value="bus">🚌 Autobús</option>
+              <option value="flight">✈️ Avión</option>
+              <option value="bicycle">🚲 Bicicleta</option>
+              <option value="walking">🚶 Caminando</option>
+              <option value="motorcycle">🏍️ Motocicleta</option>
+              <option value="scooter">🛵 Scooter</option>
+            </select>
+          </div>
+          
+          <div class="arrival-planning">
+            <h3>🕐 Planificación de llegada</h3>
+            <div class="arrival-fields">
+              <div>
+                <label for="desiredArrivalTime">Hora deseada de llegada:</label>
+                <input type="time" id="desiredArrivalTime">
+              </div>
+              <div>
+                <label for="arrivalDay">Día:</label>
+                <select id="arrivalDay">
+                  <option value="today">Hoy</option>
+                  <option value="tomorrow">Mañana</option>
+                  <option value="custom">Otro día</option>
+                </select>
+                <input type="date" id="customArrivalDate" style="display: none;">
+              </div>
+              <div>
+                <label for="bufferTime">Margen de antelación:</label>
+                <select id="bufferTime">
+                  <option value="60">1 hora</option>
+                  <option value="90">1h 30min</option>
+                  <option value="120">2 horas</option>
+                  <option value="30">30 minutos</option>
+                </select>
+              </div>
+              <div>
+                <label for="useFlightTime">Usar hora del vuelo actual:</label>
+                <input type="checkbox" id="useFlightTime" checked>
+              </div>
+            </div>
+            <button type="button" id="calculateDepartureBtn">Calcular hora de salida</button>
+            <div id="departureResult" class="departure-result"></div>
+          </div>
+          
+          <button type="button" id="calculateTransportBtn">Calcular tiempos</button>
+        </div>
+        <div class="transport-results" id="transportResults">
+          <div class="transport-mode" id="selectedTransportResult" style="display: none;">
+            <h3 id="transportTitle">🚗 Transporte seleccionado</h3>
+            <p id="transportTime">Tiempo estimado: -- min</p>
+            <p id="transportDistance">Distancia: -- km</p>
+            <p id="transportCost">Costo aproximado: -- €</p>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="trip-expenses" aria-label="Gastos del viaje">
+      <h2>TRIP EXPENSES</h2>
+      <div class="expenses-input">
+        <input type="text" id="expenseDescription" placeholder="Descripción del gasto">
+        <input type="number" id="expenseAmount" placeholder="Monto (€)">
+        <select id="expenseCategory">
+          <option value="transport">Transporte</option>
+          <option value="food">Comida</option>
+          <option value="accommodation">Alojamiento</option>
+          <option value="entertainment">Entretenimiento</option>
+          <option value="other">Otro</option>
+        </select>
+        <button type="button" id="addExpenseBtn">Añadir gasto</button>
+      </div>
+      <div class="expenses-chart">
+        <canvas id="expensesChart"></canvas>
+      </div>
+      <div class="expenses-list" id="expensesList"></div>
+      <div class="expenses-total">
+        <strong>Total gastado: <span id="totalExpenses">0 €</span></strong>
+      </div>
+    </section>
+
+    <section class="history" aria-label="Historial de vuelos">
+      <h2>LOGBOOK</h2>
+      <div id="historyList"></div>
+    </section>
+
+    <section class="stats-panel" aria-label="Estadísticas de vuelo">
+      <h2>TUS NÚMEROS</h2>
+      <div class="stats-grid">
+        <div class="stats-card">
+          <small>Total vuelos</small>
+          <strong id="statsTotalFlights">0</strong>
+        </div>
+        <div class="stats-card">
+          <small>Kilómetros volados</small>
+          <strong id="statsTotalKm">0 km</strong>
+        </div>
+        <div class="stats-card">
+          <small>Horas en aire</small>
+          <strong id="statsTotalHours">0h 0m</strong>
+        </div>
+        <div class="stats-card">
+          <small>Países visitados</small>
+          <strong id="statsCountries">0</strong>
+        </div>
+        <div class="stats-card">
+          <small>Aerolíneas usadas</small>
+          <strong id="statsAirlines">0</strong>
+        </div>
+      </div>
+    </section>
+
+    <section class="planner-panel" aria-label="Próximos vuelos">
+      <h2>PRÓXIMOS VUELOS</h2>
+      <p class="planner-intro">Guarda tus próximos vuelos con el número de vuelo y la fecha para usarlos como recordatorio.</p>
+
+      <form id="upcomingFlightForm" class="planner-form">
+        <label class="planner-field">
+          <span>Número de vuelo</span>
+          <input type="text" id="upcomingFlightNumber" placeholder="Ej. IB3166" maxlength="8" required>
+        </label>
+        <label class="planner-field">
+          <span>Destino IATA</span>
+          <input type="text" id="upcomingFlightDestination" placeholder="Ej. MXP" maxlength="3" required>
+        </label>
+        <label class="planner-field">
+          <span>Fecha del vuelo</span>
+          <input type="date" id="upcomingFlightDate" required>
+        </label>
+        <label class="planner-field planner-field-note">
+          <span>Ruta / nota (opcional)</span>
+          <input type="text" id="upcomingFlightRoute" placeholder="Ej. Madrid → Roma">
+        </label>
+        <button type="submit" id="saveUpcomingFlightBtn">Guardar recordatorio</button>
+      </form>
+
+      <p id="plannerStatus" class="planner-status" aria-live="polite">Añade un vuelo para verlo en el calendario.</p>
+
+      <div class="planner-layout">
+        <div class="planner-calendar-card">
+          <div class="planner-calendar-header">
+            <button type="button" id="prevPlannerMonthBtn">◀</button>
+            <strong id="plannerMonthLabel">Mes actual</strong>
+            <button type="button" id="nextPlannerMonthBtn">▶</button>
+          </div>
+          <div class="planner-weekdays">
+            <span>L</span>
+            <span>M</span>
+            <span>X</span>
+            <span>J</span>
+            <span>V</span>
+            <span>S</span>
+            <span>D</span>
+          </div>
+          <div id="plannerCalendarGrid" class="planner-calendar-grid"></div>
+        </div>
+
+        <div class="planner-list-card">
+          <h3>Recordatorios guardados</h3>
+          <div id="upcomingFlightsList" class="upcoming-flights-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="weather-widget-panel" aria-label="Tiempo mejorado de destinos">
+      <h2>WIDGET DEL TIEMPO MEJORADO</h2>
+      <p class="weather-widget-intro">Tiempo detallado para tus próximos vuelos y para las tarjetas de embarque que ya has subido y guardado.</p>
+      <div class="weather-widget-columns">
+        <div class="weather-widget-card">
+          <h3>Próximos vuelos</h3>
+          <div id="upcomingWeatherList" class="weather-widget-list"></div>
+        </div>
+        <div class="weather-widget-card">
+          <h3>Tarjetas guardadas</h3>
+          <div id="savedFlightsWeatherList" class="weather-widget-list"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="airports-panel" aria-label="Aeropuertos anteriores">
+      <h2>AEROPUERTOS ANTERIORES</h2>
+      <p class="airports-intro">Aeropuertos detectados en tus tarjetas de embarque guardadas.</p>
+      <div id="airportsHistoryList" class="airports-history"></div>
+    </section>
+
+    <section class="games-panel" aria-label="Mini juegos de vuelo">
+      <h2>ENTRETENIMIENTO A BORDO</h2>
+      <p class="games-intro">Mini-juegos rápidos para pasar el tiempo durante el vuelo.</p>
+
+      <div class="games-nav">
+        <button type="button" class="game-tab is-active" data-game="route">🎯 Adivina la ruta</button>
+        <button type="button" class="game-tab" data-game="quiz">✈️ Quiz de aviación</button>
+        <button type="button" class="game-tab" data-game="airport">🌍 ¿Dónde está este aeropuerto?</button>
+        <button type="button" class="game-tab" data-game="distance">📏 Estima la distancia</button>
+        <button type="button" class="game-tab" data-game="paint">🎨 Colorea tu avión</button>
+      </div>
+
+      <div class="games-stage">
+        <div class="game-screen is-active" id="game-route">
+          <div class="game-card">
+            <h3>Adivina la ruta</h3>
+            <p id="routeGameQuestion">Pulsa empezar para jugar.</p>
+            <div id="routeGameOptions" class="game-options"></div>
+            <div class="game-actions">
+              <button type="button" id="startRouteGameBtn">Nueva ruta</button>
+            </div>
+            <p id="routeGameResult" class="game-result">Listo para jugar.</p>
+          </div>
+        </div>
+
+        <div class="game-screen" id="game-quiz">
+          <div class="game-card">
+            <h3>Quiz de aviación</h3>
+            <p id="quizGameQuestion">Pulsa empezar para recibir una pregunta.</p>
+            <div id="quizGameOptions" class="game-options"></div>
+            <div class="game-actions">
+              <button type="button" id="startQuizGameBtn">Nueva pregunta</button>
+            </div>
+            <p id="quizGameResult" class="game-result">Pon a prueba tus conocimientos.</p>
+          </div>
+        </div>
+
+        <div class="game-screen" id="game-airport">
+          <div class="game-card">
+            <h3>¿Dónde está este aeropuerto?</h3>
+            <p id="airportGameQuestion">Pulsa empezar para jugar.</p>
+            <div id="airportGameOptions" class="game-options"></div>
+            <div class="game-actions">
+              <button type="button" id="startAirportGameBtn">Nuevo aeropuerto</button>
+            </div>
+            <p id="airportGameResult" class="game-result">Explora aeropuertos del mapa.</p>
+          </div>
+        </div>
+
+        <div class="game-screen" id="game-distance">
+          <div class="game-card">
+            <h3>Estima la distancia</h3>
+            <p id="distanceGameQuestion">Pulsa empezar para recibir una ruta.</p>
+            <div class="distance-estimator">
+              <input type="number" id="distanceGuessInput" min="0" step="10" placeholder="Ej. 1250">
+              <span>km</span>
+            </div>
+            <div class="game-actions">
+              <button type="button" id="checkDistanceGameBtn">Comprobar</button>
+              <button type="button" id="startDistanceGameBtn">Nueva ruta</button>
+            </div>
+            <p id="distanceGameResult" class="game-result">¿Qué tan cerca puedes estar?</p>
+          </div>
+        </div>
+
+        <div class="game-screen" id="game-paint">
+          <div class="game-card">
+            <h3>Colorea tu avión</h3>
+            <div class="plane-painter">
+              <svg viewBox="0 0 320 160" class="paint-plane-svg" aria-label="Avión para colorear">
+                <path id="paintPlaneBody" d="M48 86 L150 70 L248 76 L284 88 L248 100 L150 106 L48 92 Z" fill="#dfe8ef"></path>
+                <path id="paintPlaneWing" d="M132 84 L188 40 L212 44 L174 88 L212 126 L188 130 L132 92 Z" fill="#78c8ff"></path>
+                <path id="paintPlaneTail" d="M72 74 L90 40 L112 40 L102 76 Z" fill="#ffd166"></path>
+                <circle cx="228" cy="87" r="5" fill="#0d2234"></circle>
+              </svg>
+              <div class="paint-controls">
+                <button type="button" class="paint-btn" data-color="#78c8ff">Azul</button>
+                <button type="button" class="paint-btn" data-color="#ffd166">Dorado</button>
+                <button type="button" class="paint-btn" data-color="#ff7b72">Rojo</button>
+                <button type="button" class="paint-btn" data-color="#7ef0c6">Verde</button>
+                <button type="button" class="paint-btn" data-color="#dfe8ef">Blanco</button>
+              </div>
+            </div>
+            <p id="paintGameResult" class="game-result">Personaliza tu avión con un color nuevo.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
+  <script
+    src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+    integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo="
+    crossorigin=""
+  ></script>
+  <script src="app.js"></script>
+
+</body>
+</html>
