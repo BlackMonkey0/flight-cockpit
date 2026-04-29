@@ -5,29 +5,58 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="description" content="Flight Cockpit Logbook para escanear tarjetas de embarque, visualizar rutas y guardar vuelos.">
   <title>Flight Cockpit Logbook</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="style.css">
-  <link
-    rel="stylesheet"
-    href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
     integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY="
-    crossorigin=""
-    <link rel="manifest" href="manifest.json">
-<meta name="theme-color" content="#52a8ff">
-  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>  <!-- Google Maps API - Replace YOUR_API_KEY with actual key -->
-  <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=places,geometry"></script></head>
+    crossorigin="">
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#52a8ff">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=YOUR_API_KEY&libraries=places,geometry"></script>
 </head>
 
 <body>
   <header>
-    <h1>✈ FLIGHT COCKPIT</h1>
-    <p>Electronic Personal Flight Bag</p>
+    <div class="header-brand">
+      <div class="brand-logo" aria-hidden="true">
+        <span>FC</span>
+      </div>
+      <div class="brand-copy">
+        <p class="brand-kicker">Flight Cockpit</p>
+        <h1>Official Flight Cockpit</h1>
+        <p class="brand-subtitle">Control premium de vuelos, boarding passes y mapas globales.</p>
+      </div>
+      <div class="brand-badge">OFICIAL</div>
+    </div>
   </header>
 
   <main>
     <section class="panel" aria-label="Panel principal del vuelo">
       <div class="upload-box">
-        <label for="imageInput">Selecciona una tarjeta de embarque</label>
+        <div class="upload-actions">
+          <div>
+            <label for="imageInput">Selecciona una tarjeta de embarque</label>
+            <p class="upload-helper">Puedes subir una imagen guardada o hacer una foto directa antes de volar.</p>
+          </div>
+          <button type="button" id="cameraBoardingBtn" class="camera-boarding-btn">Hacer foto</button>
+        </div>
         <input type="file" id="imageInput" accept="image/*">
+        <input type="file" id="cameraInput" class="visually-hidden-file" accept="image/*" capture="environment" aria-hidden="true" tabindex="-1">
+      </div>
+
+      <div class="offline-panel" aria-label="Modo offline">
+        <div class="offline-copy">
+          <span class="offline-kicker">Modo vuelo</span>
+          <h2>Offline listo para usar en cabina</h2>
+          <p id="offlineStatus">Prepara la app con conexión para guardar interfaz, datos locales, juegos, historial, tarjetas y recursos disponibles en caché.</p>
+        </div>
+        <div class="offline-actions">
+          <button type="button" id="enableOfflineBtn">Activar offline</button>
+          <span id="connectionStatus" class="connection-status">Comprobando conexión...</span>
+        </div>
       </div>
 
       <div class="flight-data">
@@ -35,6 +64,9 @@
         <p id="flight">Flight: ---</p>
         <p id="route">Route: ---</p>
         <p id="seat">Seat: ---</p>
+        <p id="terminal">Terminal: ---</p>
+        <p id="flightClass">Clase: ---</p>
+        <p id="baggage">Equipaje: ---</p>
         <p id="date">Date: ---</p>
       </div>
 
@@ -42,6 +74,7 @@
         <h2>FLIGHT SYSTEMS</h2>
         <p id="airline">Airline: ---</p>
         <p id="aircraft">Aircraft: ---</p>
+        <p id="gate">Gate: ---</p>
         <p id="duration">Duration: ---</p>
         <p id="distance">Distance: ---</p>
         <p id="weather">Weather: ---</p>
@@ -323,7 +356,30 @@
 
     <section class="history" aria-label="Historial de vuelos">
       <h2>LOGBOOK</h2>
-      <div id="historyList"></div>
+      <div class="history-summary-grid">
+        <div class="history-metric">
+          <strong id="historyFlightCount">0</strong>
+          <small>Vuelos registrados</small>
+        </div>
+        <div class="history-metric">
+          <strong id="historyHoursFlown">0h 0m</strong>
+          <small>Horas voladas</small>
+        </div>
+        <div class="history-metric">
+          <strong id="historyCountriesCount">0</strong>
+          <small>Países visitados</small>
+        </div>
+      </div>
+      <div class="history-main">
+        <div class="history-map-card">
+          <h3>Mapa histórico global</h3>
+          <div id="historyMap"></div>
+        </div>
+        <div class="history-list-card">
+          <h3>Vuelos guardados</h3>
+          <div id="historyList"></div>
+        </div>
+      </div>
     </section>
 
     <section class="stats-panel" aria-label="Estadísticas de vuelo">

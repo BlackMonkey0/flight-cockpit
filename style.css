@@ -34,7 +34,8 @@ body {
   margin: 0;
   padding: 28px;
   color: var(--text);
-  font-family: "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  font-family: "Inter", "Segoe UI", Tahoma, Geneva, Verdana, sans-serif;
+  transition: background 0.5s ease, color 0.25s ease;
   background: linear-gradient(180deg, var(--bg-top) 0%, var(--bg-bottom) 100%);
   background-image:
     radial-gradient(circle at 14% 10%, rgba(120, 200, 255, 0.12), transparent 18%),
@@ -55,6 +56,102 @@ body::before {
   background-size: 40px 40px, 40px 40px, 100% 100%;
   opacity: 0.6;
   mask-image: linear-gradient(180deg, rgba(0, 0, 0, 0.75), transparent 92%);
+}
+
+.header-brand {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.brand-logo {
+  width: 84px;
+  height: 84px;
+  border-radius: 28px;
+  display: grid;
+  place-items: center;
+  background: radial-gradient(circle at top left, #8be4ff, #335cff);
+  color: white;
+  font-size: 2.3rem;
+  font-weight: 800;
+  box-shadow: 0 24px 48px rgba(9, 25, 48, 0.45);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.brand-copy {
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.brand-kicker {
+  margin: 0 0 8px;
+  color: #96d7ff;
+  text-transform: uppercase;
+  letter-spacing: 0.24em;
+  font-size: 0.82rem;
+  font-weight: 700;
+}
+
+.brand-copy h1 {
+  margin: 0;
+  font-size: clamp(2rem, 4vw, 3.8rem);
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  line-height: 1.02;
+}
+
+.brand-subtitle {
+  margin: 10px 0 0;
+  color: rgba(238, 248, 255, 0.78);
+  max-width: 40rem;
+  font-size: 0.96rem;
+  line-height: 1.65;
+}
+
+.brand-badge {
+  padding: 12px 18px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+  font-size: 0.78rem;
+  color: #d4e9ff;
+}
+
+.loading-overlay,
+#loadingIndicator {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: grid;
+  place-items: center;
+  background: rgba(2, 6, 14, 0.82);
+  backdrop-filter: blur(18px);
+}
+
+.loading-overlay .loading-spinner {
+  width: 76px;
+  height: 76px;
+  border: 6px solid rgba(255, 255, 255, 0.08);
+  border-top-color: #9cfffb;
+  border-radius: 50%;
+  animation: spin 1.2s linear infinite;
+  margin-bottom: 18px;
+}
+
+.loading-overlay p {
+  margin: 0;
+  color: #f3f9ff;
+  font-size: 1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.18em;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
 }
 
 header,
@@ -156,6 +253,7 @@ header p {
 }
 
 .upload-box,
+.offline-panel,
 .cockpit-map,
 .controls,
 .flight-data,
@@ -177,6 +275,7 @@ header p {
 }
 
 .upload-box::before,
+.offline-panel::before,
 .flight-data::before,
 .assistant-panel::before,
 .systems::before,
@@ -203,7 +302,7 @@ header p {
 }
 
 .upload-box::before {
-  content: "Sube tu boarding pass";
+  content: "Sube o fotografía tu boarding pass";
   display: block;
   margin-bottom: 10px;
   color: var(--muted);
@@ -218,6 +317,25 @@ header p {
   color: var(--text);
   font-size: 0.95rem;
   font-weight: 600;
+}
+
+.upload-actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 12px;
+}
+
+.upload-helper {
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.88rem;
+}
+
+.camera-boarding-btn {
+  flex: 0 0 auto;
+  min-width: 150px;
 }
 
 .upload-box input {
@@ -247,6 +365,77 @@ header p {
   color: #06121a;
   font-weight: 700;
   cursor: pointer;
+}
+
+.visually-hidden-file {
+  position: absolute;
+  width: 1px !important;
+  height: 1px;
+  padding: 0 !important;
+  border: 0 !important;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.offline-panel {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 18px;
+  background:
+    linear-gradient(135deg, rgba(126, 240, 198, 0.12), rgba(120, 200, 255, 0.08)),
+    linear-gradient(180deg, rgba(18, 30, 44, 0.95), rgba(10, 18, 28, 0.98));
+}
+
+.offline-kicker {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--accent);
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+}
+
+.offline-panel h2 {
+  margin: 0 0 6px;
+  color: var(--text);
+  font-size: 1.05rem;
+}
+
+.offline-panel p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.offline-actions {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  min-width: 210px;
+}
+
+.connection-status {
+  display: inline-flex;
+  justify-content: center;
+  padding: 8px 10px;
+  border: 1px solid rgba(120, 200, 255, 0.18);
+  border-radius: 999px;
+  color: var(--muted);
+  font-size: 0.82rem;
+  text-align: center;
+}
+
+.connection-status.is-online {
+  color: #7ef0c6;
+}
+
+.connection-status.is-offline {
+  color: #ffd166;
 }
 
 .flight-data,
@@ -880,6 +1069,103 @@ button:active {
   border: 1px solid rgba(120, 200, 255, 0.24) !important;
   box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.04), 0 24px 40px rgba(0, 0, 0, 0.28) !important;
   overflow: hidden;
+}
+
+.history-summary-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.history-metric {
+  padding: 18px 20px;
+  border-radius: 18px;
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text);
+  box-shadow: 0 16px 32px rgba(0, 0, 0, 0.18);
+}
+
+.history-metric strong {
+  display: block;
+  font-size: 1.8rem;
+  margin-bottom: 8px;
+}
+
+.history-metric small {
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+}
+
+.history-main {
+  display: grid;
+  grid-template-columns: minmax(320px, 1.5fr) minmax(260px, 0.9fr);
+  gap: 18px;
+}
+
+.history-map-card,
+.history-list-card {
+  padding: 22px;
+  border-radius: var(--radius-xl);
+  background: linear-gradient(180deg, rgba(19, 34, 52, 0.97), rgba(9, 18, 29, 0.95));
+  border: 1px solid rgba(120, 200, 255, 0.12);
+  box-shadow: var(--shadow-lg);
+}
+
+.history-map-card h3,
+.history-list-card h3 {
+  margin: 0 0 16px;
+  font-size: 1rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+#historyMap {
+  height: 320px;
+  width: 100%;
+  border-radius: 18px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.history-list-card {
+  display: grid;
+  gap: 12px;
+}
+
+.history-item {
+  padding: 14px 16px;
+  border-radius: 14px;
+  background: rgba(12, 20, 32, 0.95);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  cursor: pointer;
+}
+
+.history-item:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 18px 30px rgba(0, 0, 0, 0.2);
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 12px;
+}
+
+.history-details {
+  display: grid;
+  grid-template-columns: 1fr;
+  gap: 6px;
+  color: var(--muted);
+  font-size: 0.95rem;
+}
+
+.history-details span {
+  display: block;
 }
 
 .map-controls {
@@ -1612,6 +1898,18 @@ button:active {
 
   .panel {
     grid-template-columns: 1fr;
+  }
+
+  .upload-actions,
+  .offline-panel {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .camera-boarding-btn,
+  .offline-actions {
+    width: 100%;
+    min-width: 0;
   }
 
   .controls {

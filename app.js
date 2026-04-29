@@ -3,6 +3,9 @@
 // ==========================================
 let currentFlight = {};
 let map = null;
+let historyMap = null;
+let historyLines = [];
+let historyMarkers = [];
 let rutaActual = null;
 let marcadorOrigen = null;
 let marcadorDestino = null;
@@ -427,8 +430,7 @@ function inicializarMapa() {
 // ==========================================
 // OCR - PROCESAR TARJETA DE EMBARQUE
 // ==========================================
-document.getElementById("imageInput").addEventListener("change", async function(e) {
-    const file = e.target.files[0];
+async function processBoardingPassFile(file) {
     if (!file) return;
     
     // Mostrar estado de carga
@@ -460,6 +462,9 @@ document.getElementById("imageInput").addEventListener("change", async function(
             destination: routeData.destination,
             seat: extraerAsiento(text),
             gate: extraerPuerta(text),
+            terminal: extraerTerminal(text),
+            flightClass: extraerClase(text),
+            baggage: extraerEquipaje(text),
             boardingGroup: extraerGrupo(text),
             departureTime: extraerHoraVuelo(text),
             boardingTime: extraerHoraEmbarque(text),
@@ -475,7 +480,7 @@ document.getElementById("imageInput").addEventListener("change", async function(
         mostrarEstadoCarga(false);
         updateDetailedWeatherWidgets();
         
-        // Mostrar notificación
+        playScanSuccessTone();
         mostrarNotificacion('✅ Tarjeta de embarque procesada', 'success');
         
     } catch (error) {
@@ -489,7 +494,21 @@ document.getElementById("imageInput").addEventListener("change", async function(
             cargarVueloDemo();
         }, 1000);
     }
-});
+}
+
+const imageInput = document.getElementById("imageInput");
+if (imageInput) {
+    imageInput.addEventListener("change", function(e) {
+        processBoardingPassFile(e.target.files[0]);
+    });
+}
+
+const cameraInput = document.getElementById("cameraInput");
+if (cameraInput) {
+    cameraInput.addEventListener("change", function(e) {
+        processBoardingPassFile(e.target.files[0]);
+    });
+}
 
 // ==========================================
 // FUNCIONES DE EXTRACCIÓN OCR MEJORADAS
@@ -541,6 +560,63 @@ function extraerPuerta(text) {
     }
 
     return "---";
+}
+
+function extraerTerminal(text) {
+    const patrones = [
+        /\bTERMINAL\s*[:\-]?\s*(T\d|[A-Z]\d?)\b/i,
+        /\bTERMINAL\s*([0-9]{1,2})\b/i,
+        /\bTPA\s*[:\-]?\s*(T\d)\b/i
+    ];
+
+    for (const patron of patrones) {
+        const match = text.match(patron);
+        if (match) return match[1].toUpperCase();
+    }
+
+    return "---";
+}
+
+function extraerClase(text) {
+    const patterns = [
+        /\bBUSINESS\b/i,
+        /\bPREMIUM ECONOMY\b/i,
+        /\bFIRST CLASS\b/i,
+        /\bC\/F\b/i,
+        /\bF\/C\b/i,
+        /\bCLASE\s*[:\-]?\s*(ECONOMY|TURISTA|BUSINESS|PRIMERA|PREMIUM)\b/i,
+        /\bECONOMY\b/i,
+        /\bTURISTA\b/i,
+        /\bPRIMERA\b/i
+    ];
+
+    const resultado = patterns.reduce((value, pattern) => {
+        const match = text.match(pattern);
+        return match ? match[0] : value;
+    }, null);
+
+    if (!resultado) return "Turista";
+    if (/BUSINESS|PREMIUM|FIRST|PRIMERA/i.test(resultado)) return /BUSINESS/i.test(resultado) ? "Business" : /FIRST|PRIMERA/i.test(resultado) ? "Primera" : /PREMIUM/i.test(resultado) ? "Premium Economy" : "Business";
+    if (/ECONOMY|TURISTA/i.test(resultado)) return "Turista";
+    return resultado;
+}
+
+function extraerEquipaje(text) {
+    const patterns = [
+        /\b(\d{1,2}\s?KG|\d{1,2}KG|\d{1,2}\s?KGS|\d{1,2}KGS)\b/i,
+        /\b(\d{1,2}\s?PC|\d{1,2}\s?PCE|\d{1,2}PCE)\b/i,
+        /\bBAGGAGE\s*[:\-]?\s*([A-Z0-9\s]+)\b/i,
+        /\bEQUIPAJE\s*[:\-]?\s*([A-Z0-9\s]+)\b/i
+    ];
+
+    for (const pattern of patterns) {
+        const match = text.match(pattern);
+        if (match) {
+            return match[1] ? match[1].trim() : match[0].trim();
+        }
+    }
+
+    return "1 PC incluido";
 }
 
 function extraerGrupo(text) {
@@ -678,7 +754,11 @@ function actualizarPantalla() {
     setText("flight", `🛫 ${currentFlight.flight}`);
     setText("route", `📍 ${currentFlight.route}`);
     setText("seat", `💺 ${currentFlight.seat}`);
+    setText("terminal", `🛅 ${currentFlight.terminal || '---'}`);
+    setText("flightClass", `🎟️ ${currentFlight.flightClass || 'Turista'}`);
+    setText("baggage", `🧳 ${currentFlight.baggage || '1 PC incluido'}`);
     setText("date", `📅 ${currentFlight.date}`);
+    setText("gate", `🚪 ${currentFlight.gate || '---'}`);
     actualizarChecklistVuelo();
     ensureFlightPackingList();
     renderPackingChecklist();
@@ -2727,6 +2807,16 @@ function playSeatbeltDing() {
     updateSoundStatus("Reproduciendo: Ding del cinturón.");
 }
 
+function playScanSuccessTone() {
+    stopAllSounds();
+    playToneSequence([
+        { frequency: 880, duration: 0.14, gap: 0.18, volume: 0.08, type: "triangle" },
+        { frequency: 1046, duration: 0.18, gap: 0.18, volume: 0.08, type: "triangle" },
+        { frequency: 1318, duration: 0.2, gap: 0.24, volume: 0.06, type: "triangle" }
+    ]);
+    updateSoundStatus("Escaneo completado con éxito.");
+}
+
 function playCaptainAnnouncement() {
     stopAllSounds();
     updateSoundStatus("Reproduciendo: Anuncio del capitán.");
@@ -2907,11 +2997,11 @@ function loadHistory() {
     if (history.length === 0) {
         html = '<p>📭 No hay vuelos guardados</p>';
     } else {
-        history.slice(-10).reverse().forEach((f, index) => {
+        history.slice(-12).reverse().forEach((f, index) => {
             const fecha = f.date || 'Fecha desconocida';
             const ruta = f.route || 'Ruta no disponible';
             const asiento = f.seat || '---';
-            
+            const clase = f.flightClass || 'Turista';
             html += `
                 <div class="history-item" onclick="cargarVueloGuardado(${history.length - 1 - index})">
                     <div class="history-header">
@@ -2920,7 +3010,8 @@ function loadHistory() {
                     </div>
                     <div class="history-details">
                         <span>📍 ${ruta}</span>
-                        <span>💺 Asiento ${asiento}</span>
+                        <span>🎟️ ${clase} · 💺 ${asiento}</span>
+                        <span>🛅 ${f.terminal || '---'} · 🚪 ${f.gate || '---'}</span>
                     </div>
                 </div>
             `;
@@ -2928,6 +3019,95 @@ function loadHistory() {
     }
     
     document.getElementById("historyList").innerHTML = html;
+    renderHistorySummary(history);
+    renderHistoryMap(history);
+}
+
+function renderHistorySummary(history) {
+    const countries = new Set();
+    let totalMinutes = 0;
+
+    history.forEach(flight => {
+        if (Number.isFinite(flight.durationMinutes)) {
+            totalMinutes += flight.durationMinutes;
+        }
+
+        if (flight.origin && airportDatabase[flight.origin]) {
+            countries.add(airportDatabase[flight.origin].pais);
+        }
+        if (flight.destination && airportDatabase[flight.destination]) {
+            countries.add(airportDatabase[flight.destination].pais);
+        }
+    });
+
+    setText("historyFlightCount", formatNumber(history.length));
+    setText("historyHoursFlown", formatMinutes(totalMinutes));
+    setText("historyCountriesCount", formatNumber(countries.size));
+}
+
+function renderHistoryMap(history) {
+    if (!document.getElementById('historyMap')) return;
+
+    if (!historyMap) {
+        historyMap = L.map('historyMap', { zoomControl: true, attributionControl: false }).setView([20, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '&copy; OpenStreetMap contributors',
+            maxZoom: 18,
+            className: 'map-tiles'
+        }).addTo(historyMap);
+    }
+
+    historyLines.forEach(line => historyMap.removeLayer(line));
+    historyMarkers.forEach(marker => historyMap.removeLayer(marker));
+    historyLines = [];
+    historyMarkers = [];
+
+    const colors = ['#ffb248', '#4facff', '#7ef1d1', '#ff7a78', '#9b59ff', '#65a7ff'];
+    const bounds = [];
+
+    history.forEach((flight, index) => {
+        const origin = airportDatabase[flight.origin];
+        const destination = airportDatabase[flight.destination];
+
+        if (!origin || !destination) return;
+
+        const color = colors[index % colors.length];
+        const path = [[origin.lat, origin.lng], [destination.lat, destination.lng]];
+
+        const line = L.polyline(path, {
+            color,
+            weight: 4,
+            opacity: 0.9,
+            smoothFactor: 1
+        }).addTo(historyMap);
+        historyLines.push(line);
+
+        const originMarker = L.circleMarker([origin.lat, origin.lng], {
+            radius: 6,
+            color,
+            weight: 2,
+            fillColor: color,
+            fillOpacity: 0.9
+        }).bindPopup(`<strong>${origin.nombre}</strong><br>${origin.ciudad}, ${origin.pais}`)
+          .addTo(historyMap);
+        historyMarkers.push(originMarker);
+
+        const destinationMarker = L.circleMarker([destination.lat, destination.lng], {
+            radius: 6,
+            color,
+            weight: 2,
+            fillColor: color,
+            fillOpacity: 0.9
+        }).bindPopup(`<strong>${destination.nombre}</strong><br>${destination.ciudad}, ${destination.pais}`)
+          .addTo(historyMap);
+        historyMarkers.push(destinationMarker);
+
+        bounds.push([origin.lat, origin.lng], [destination.lat, destination.lng]);
+    });
+
+    if (bounds.length) {
+        historyMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 4 });
+    }
 }
 
 function cargarVueloGuardado(index) {
@@ -2938,6 +3118,116 @@ function cargarVueloGuardado(index) {
         actualizarPantalla();
         mostrarNotificacion(`📂 Vuelo ${currentFlight.flight} cargado`, 'info');
     }
+}
+
+function updateConnectionStatus() {
+    const badge = document.getElementById("connectionStatus");
+    const button = document.getElementById("enableOfflineBtn");
+    if (!badge) return;
+
+    const online = navigator.onLine;
+    const mode = getNetworkMode();
+    badge.textContent = mode === "offline"
+        ? "Modo offline activo"
+        : (online ? "Modo online activo" : "Sin conexión: usando caché");
+    badge.classList.toggle("is-online", online);
+    badge.classList.toggle("is-offline", !online || mode === "offline");
+
+    if (button) {
+        button.textContent = mode === "offline" ? "Activar online" : "Activar offline";
+        button.setAttribute("aria-pressed", mode === "offline" ? "true" : "false");
+    }
+}
+
+function openBoardingCamera() {
+    const input = document.getElementById("cameraInput") || document.getElementById("imageInput");
+    if (!input) return;
+
+    input.setAttribute("capture", "environment");
+    input.click();
+}
+
+function getOfflineSnapshot() {
+    return {
+        savedAt: new Date().toISOString(),
+        currentFlight,
+        flights: JSON.parse(localStorage.getItem("flights") || "[]"),
+        upcomingFlights: JSON.parse(localStorage.getItem("upcomingFlights") || "[]"),
+        uploadedBoardingPasses: JSON.parse(localStorage.getItem("uploadedBoardingPasses") || "[]"),
+        tripExpenses: JSON.parse(localStorage.getItem("tripExpenses") || "[]"),
+        packingChecklist: currentFlight.packingChecklist || getDefaultPackingChecklist(),
+        airportsAvailable: Object.keys(airportDatabase).length
+    };
+}
+
+function getNetworkMode() {
+    return localStorage.getItem("flightCockpitNetworkMode") === "offline" ? "offline" : "online";
+}
+
+async function notifyServiceWorkerNetworkMode(mode) {
+    if (!("serviceWorker" in navigator)) return;
+    const registration = await navigator.serviceWorker.ready;
+    if (registration.active) {
+        registration.active.postMessage({ type: "SET_NETWORK_MODE", mode });
+    }
+}
+
+async function activateOnlineMode() {
+    localStorage.setItem("flightCockpitNetworkMode", "online");
+    await notifyServiceWorkerNetworkMode("online");
+    setText("offlineStatus", "Online activado. La web volverá a usar internet con normalidad y dejará la caché como respaldo si falla la conexión.");
+    mostrarNotificacion("Modo online activado", "success");
+    updateConnectionStatus();
+}
+
+async function activateOfflineMode() {
+    const button = document.getElementById("enableOfflineBtn");
+    if (!("serviceWorker" in navigator) || !("caches" in window)) {
+        setText("offlineStatus", "Este navegador no permite guardar la app completa para usarla offline.");
+        mostrarNotificacion("Modo offline no disponible en este navegador", "error");
+        return;
+    }
+
+    if (button) button.disabled = true;
+    setText("offlineStatus", "Preparando caché offline y guardando tus datos de vuelo...");
+
+    try {
+        localStorage.setItem("flightCockpitOfflineSnapshot", JSON.stringify(getOfflineSnapshot()));
+        localStorage.setItem("flightCockpitNetworkMode", "offline");
+
+        const registration = await navigator.serviceWorker.ready;
+        if (registration.active) {
+            registration.active.postMessage({ type: "CACHE_OFFLINE_ASSETS" });
+            registration.active.postMessage({ type: "SET_NETWORK_MODE", mode: "offline" });
+        }
+
+        const cache = await caches.open("flight-cockpit-user-data");
+        await cache.put(
+            "/offline-snapshot.json",
+            new Response(localStorage.getItem("flightCockpitOfflineSnapshot"), {
+                headers: { "Content-Type": "application/json" }
+            })
+        );
+
+        setText("offlineStatus", "Offline activado. En vuelo podrás abrir la app, consultar datos guardados, juegos, historial, checklist y tarjetas ya cargadas.");
+        mostrarNotificacion("Modo offline preparado", "success");
+    } catch (error) {
+        console.error("Error preparando modo offline:", error);
+        setText("offlineStatus", "No se pudo completar la caché offline. Abre la app con conexión y vuelve a intentarlo antes del vuelo.");
+        mostrarNotificacion("No se pudo activar offline", "error");
+    } finally {
+        if (button) button.disabled = false;
+        updateConnectionStatus();
+    }
+}
+
+async function toggleNetworkMode() {
+    if (getNetworkMode() === "offline") {
+        await activateOnlineMode();
+        return;
+    }
+
+    await activateOfflineMode();
 }
 
 // ==========================================
@@ -2961,6 +3251,21 @@ document.addEventListener('DOMContentLoaded', function() {
     if (saveBtn) {
         saveBtn.addEventListener('click', saveFlight);
     }
+
+    const cameraBoardingBtn = document.getElementById("cameraBoardingBtn");
+    if (cameraBoardingBtn) {
+        cameraBoardingBtn.addEventListener("click", openBoardingCamera);
+    }
+
+    const enableOfflineBtn = document.getElementById("enableOfflineBtn");
+    if (enableOfflineBtn) {
+        enableOfflineBtn.addEventListener("click", toggleNetworkMode);
+    }
+
+    updateConnectionStatus();
+    notifyServiceWorkerNetworkMode(getNetworkMode());
+    window.addEventListener("online", updateConnectionStatus);
+    window.addEventListener("offline", updateConnectionStatus);
 
     const upcomingFlightForm = document.getElementById("upcomingFlightForm");
     if (upcomingFlightForm) {
@@ -3246,7 +3551,8 @@ document.head.appendChild(style);
 window.saveFlight = saveFlight;
 window.cargarVueloGuardado = cargarVueloGuardado;
 
-if ("serviceworker" in navigator) {
-    navigator.servideworker.register("/service-worker.js")
-        .then(() => console.log("Offline mode active"));
+if ("serviceWorker" in navigator) {
+    navigator.serviceWorker.register("/service-worker.js")
+        .then(() => console.log("Offline mode active"))
+        .catch(error => console.error("Service worker registration failed:", error));
 }
