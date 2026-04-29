@@ -257,6 +257,7 @@ header p {
 .cockpit-map,
 .controls,
 .flight-data,
+.journey-data,
 .assistant-panel,
 .systems,
 .history,
@@ -277,6 +278,7 @@ header p {
 .upload-box::before,
 .offline-panel::before,
 .flight-data::before,
+.journey-data::before,
 .assistant-panel::before,
 .systems::before,
 .checklist::before,
@@ -439,6 +441,7 @@ header p {
 }
 
 .flight-data,
+.journey-data,
 .assistant-panel,
 .systems,
 .checklist,
@@ -453,6 +456,7 @@ header p {
 }
 
 .flight-data h2,
+.journey-data h2,
 .assistant-panel h2,
 .systems h2,
 .checklist h2,
@@ -472,15 +476,18 @@ header p {
 }
 
 .flight-data p,
+.journey-data p,
 .systems p {
   margin: 0;
   padding: 10px 0;
   border-bottom: 1px solid rgba(255, 255, 255, 0.06);
   color: var(--text);
   font-size: 0.94rem;
+  overflow-wrap: anywhere;
 }
 
 .flight-data p:last-child,
+.journey-data p:last-child,
 .systems p:last-child {
   border-bottom: none;
 }
@@ -1972,6 +1979,7 @@ button:active {
   .stats-panel,
   .planner-panel,
   .flight-data,
+  .journey-data,
   .systems,
   .cockpit-map,
   .upload-box {
@@ -1986,6 +1994,7 @@ button:active {
 
   header p,
   .flight-data h2,
+  .journey-data h2,
   .systems h2,
   .cockpit-map h2,
   .history h2 {
@@ -2241,6 +2250,7 @@ button:active {
   }
 
   .flight-data,
+  .journey-data,
   .systems,
   .controls,
   .checklist,
@@ -2463,6 +2473,7 @@ button:active {
   }
 
   .flight-data h2,
+  .journey-data h2,
   .assistant-panel h2,
   .systems h2,
   .checklist h2,

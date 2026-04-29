@@ -435,45 +435,22 @@ async function processBoardingPassFile(file) {
     
     // Mostrar estado de carga
     mostrarEstadoCarga(true);
-    setText("flight", "🔍 Analizando tarjeta...");
-    setText("route", "Procesando OCR...");
+    setText("flight", "🔍 Analizando billete...");
+    setText("route", "Leyendo QR y OCR...");
     
     try {
-        const result = await Tesseract.recognize(file, "eng+spa", {
-            logger: info => {
-                if (info.status === 'recognizing text') {
-                    const progress = Math.round(info.progress * 100);
-                    setText("flight", `📊 Reconociendo texto (${progress}%)`);
-                }
-            }
-        });
-        
-        const text = result.data.text.toUpperCase();
+        const scan = await readTravelDocument(file);
+        const text = normalizeScanText(scan.text);
         console.log('📝 Texto reconocido:', text);
-        
-        // Extraer datos del vuelo
-        const routeData = extraerDatosRuta(text);
-        const extractedDate = extraerFecha(text);
-        
-        currentFlight = {
-            flight: extraerNumeroVuelo(text),
-            route: routeData.route,
-            origin: routeData.origin,
-            destination: routeData.destination,
-            seat: extraerAsiento(text),
-            gate: extraerPuerta(text),
-            terminal: extraerTerminal(text),
-            flightClass: extraerClase(text),
-            baggage: extraerEquipaje(text),
-            boardingGroup: extraerGrupo(text),
-            departureTime: extraerHoraVuelo(text),
-            boardingTime: extraerHoraEmbarque(text),
-            date: extractedDate,
-            flightDate: resolverFechaVueloISO(extractedDate),
-            rawText: text
-        };
+        console.log('🔳 Código detectado:', scan.qrRaw || 'Sin código');
 
-        registerUploadedBoardingPass(currentFlight);
+        currentFlight = parseTravelDocument(text, scan.qrRaw);
+
+        if (currentFlight.transportType === "train") {
+            registerUploadedJourney(currentFlight);
+        } else {
+            registerUploadedBoardingPass(currentFlight);
+        }
         
         // Actualizar interfaz
         actualizarPantalla();
@@ -481,13 +458,13 @@ async function processBoardingPassFile(file) {
         updateDetailedWeatherWidgets();
         
         playScanSuccessTone();
-        mostrarNotificacion('✅ Tarjeta de embarque procesada', 'success');
+        mostrarNotificacion(currentFlight.transportType === "train" ? '✅ Billete de tren procesado' : '✅ Tarjeta de embarque procesada', 'success');
         
     } catch (error) {
         console.error("❌ Error OCR:", error);
         mostrarEstadoCarga(false);
         setText("flight", "❌ Error al procesar");
-        mostrarNotificacion('Error al leer la tarjeta de embarque', 'error');
+        mostrarNotificacion('Error al leer el billete. Prueba con más luz y el documento bien enfocado.', 'error');
         
         // Cargar vuelo demo
         setTimeout(() => {
@@ -510,21 +487,199 @@ if (cameraInput) {
     });
 }
 
+async function readTravelDocument(file) {
+    const [barcodeResult, ocrText] = await Promise.all([
+        scanBarcodeFromImage(file),
+        recognizeDocumentText(file)
+    ]);
+
+    return {
+        qrRaw: barcodeResult?.rawValue || "",
+        barcodeFormat: barcodeResult?.format || "",
+        text: [barcodeResult?.rawValue || "", ocrText].filter(Boolean).join("\n")
+    };
+}
+
+async function scanBarcodeFromImage(file) {
+    if (!("BarcodeDetector" in window)) return null;
+
+    try {
+        const detector = new BarcodeDetector({
+            formats: ["qr_code", "pdf417", "aztec", "data_matrix"]
+        });
+        const bitmap = await createImageBitmap(file);
+        const codes = await detector.detect(bitmap);
+        bitmap.close?.();
+        return codes[0] || null;
+    } catch (error) {
+        console.warn("BarcodeDetector no pudo leer el código:", error);
+        return null;
+    }
+}
+
+async function recognizeDocumentText(file) {
+    const enhanced = await createEnhancedOcrImage(file).catch(() => null);
+    const sources = enhanced ? [file, enhanced] : [file];
+    const texts = [];
+
+    for (let index = 0; index < sources.length; index += 1) {
+        const result = await Tesseract.recognize(sources[index], "eng+spa+ita+fra", {
+            tessedit_pageseg_mode: "6",
+            preserve_interword_spaces: "1",
+            logger: info => {
+                if (info.status === 'recognizing text') {
+                    const progress = Math.round(info.progress * 100);
+                    const pass = sources.length > 1 ? ` ${index + 1}/${sources.length}` : "";
+                    setText("flight", `📊 Reconociendo texto${pass} (${progress}%)`);
+                }
+            }
+        });
+        texts.push(result.data.text || "");
+    }
+
+    return mergeScanTexts(texts);
+}
+
+async function createEnhancedOcrImage(file) {
+    const bitmap = await createImageBitmap(file);
+    const maxWidth = 1800;
+    const scale = Math.min(1, maxWidth / bitmap.width);
+    const canvas = document.createElement("canvas");
+    canvas.width = Math.round(bitmap.width * scale);
+    canvas.height = Math.round(bitmap.height * scale);
+    const ctx = canvas.getContext("2d", { willReadFrequently: true });
+    ctx.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+    bitmap.close?.();
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const data = imageData.data;
+    for (let i = 0; i < data.length; i += 4) {
+        const gray = (data[i] * 0.299) + (data[i + 1] * 0.587) + (data[i + 2] * 0.114);
+        const contrasted = gray > 150 ? 255 : gray < 95 ? 0 : Math.min(255, Math.max(0, (gray - 128) * 1.8 + 128));
+        data[i] = contrasted;
+        data[i + 1] = contrasted;
+        data[i + 2] = contrasted;
+    }
+    ctx.putImageData(imageData, 0, 0);
+
+    return new Promise((resolve, reject) => {
+        canvas.toBlob(blob => blob ? resolve(blob) : reject(new Error("No se pudo preparar imagen OCR")), "image/png", 1);
+    });
+}
+
+function mergeScanTexts(texts) {
+    const seen = new Set();
+    return texts
+        .join("\n")
+        .split(/\n+/)
+        .map(line => line.trim())
+        .filter(line => {
+            const key = line.toUpperCase().replace(/\s+/g, " ");
+            if (!key || seen.has(key)) return false;
+            seen.add(key);
+            return true;
+        })
+        .join("\n");
+}
+
+function normalizeScanText(text) {
+    return (text || "")
+        .replace(/[|]/g, "I")
+        .replace(/[“”]/g, '"')
+        .replace(/[’]/g, "'")
+        .replace(/\s+/g, " ")
+        .toUpperCase()
+        .trim();
+}
+
+function parseTravelDocument(text, qrRaw = "") {
+    return isTrainDocument(text, qrRaw) ? createTrainJourney(text, qrRaw) : createFlightJourney(text, qrRaw);
+}
+
+function isTrainDocument(text, qrRaw = "") {
+    const combined = `${text} ${qrRaw}`.toUpperCase();
+    return /\b(RENFE|AVLO|OUIGO|ITALO|TRENITALIA|SNCF|TRAIN|TRENO|TREIN|TREN|RAIL|VOITURE|COACH|VAGON|VAGONE|CARROZZA|ANDEN|PLATFORM|BINARIO)\b/.test(combined);
+}
+
+function createFlightJourney(text, qrRaw = "") {
+    const routeData = extraerDatosRuta(text);
+    const extractedDate = extraerFecha(text);
+
+    return {
+        transportType: "flight",
+        flight: extraerNumeroVuelo(text),
+        route: routeData.route,
+        origin: routeData.origin,
+        destination: routeData.destination,
+        seat: extraerAsiento(text),
+        gate: extraerPuerta(text),
+        terminal: extraerTerminal(text),
+        flightClass: extraerClase(text),
+        baggage: extraerEquipaje(text),
+        boardingGroup: extraerGrupo(text),
+        departureTime: extraerHoraVuelo(text),
+        boardingTime: extraerHoraEmbarque(text),
+        date: extractedDate,
+        flightDate: resolverFechaVueloISO(extractedDate),
+        rawText: text,
+        qrRaw
+    };
+}
+
+function createTrainJourney(text, qrRaw = "") {
+    const routeData = extraerDatosRutaTren(text);
+    const times = extraerHorasTren(text);
+    const trainNumber = extraerNumeroTren(text);
+    const trainClass = extraerClaseTren(text);
+
+    return {
+        transportType: "train",
+        flight: trainNumber,
+        trainNumber,
+        route: routeData.route,
+        origin: routeData.origin,
+        destination: routeData.destination,
+        seat: extraerAsientoTren(text),
+        coach: extraerVagonTren(text),
+        gate: extraerAndenTren(text),
+        terminal: "---",
+        flightClass: trainClass,
+        trainClass,
+        operatorName: extraerOperadoraTren(text),
+        departureTime: times.departure,
+        arrivalTime: times.arrival,
+        durationText: extraerDuracionTren(text, times),
+        date: extraerFecha(text),
+        flightDate: resolverFechaVueloISO(extraerFecha(text)),
+        rawText: text,
+        qrRaw
+    };
+}
+
+function registerUploadedJourney(journey) {
+    const journeys = JSON.parse(localStorage.getItem("uploadedJourneys") || "[]");
+    journeys.unshift({
+        ...journey,
+        uploadedAt: new Date().toISOString()
+    });
+    localStorage.setItem("uploadedJourneys", JSON.stringify(journeys.slice(0, 30)));
+}
+
 // ==========================================
 // FUNCIONES DE EXTRACCIÓN OCR MEJORADAS
 // ==========================================
 function extraerNumeroVuelo(text) {
     // Buscar patrones como: FR2481, IB3245, UX1065, VY8432
     const patrones = [
-        /([A-Z]{2})\s*(\d{3,4})/g,
-        /([A-Z]{3})\s*(\d{2,4})/g,
-        /FLIGHT\s*[:]?\s*([A-Z]{2,3}\s*\d{2,4})/i
+        /\b(?:FLIGHT|VUELO|VOLO|VOL)\s*[:#\-]?\s*([A-Z0-9]{2,3})\s*([0-9OISB]{2,5})\b/i,
+        /\b([A-Z0-9]{2})\s*([0-9OISB]{3,5})\b/g,
+        /\b([A-Z]{3})\s*([0-9OISB]{2,4})\b/g
     ];
     
     for (let patron of patrones) {
         const match = patron.exec(text);
         if (match) {
-            return match[1] + match[2];
+            return normalizeFlightNumber(`${match[1]}${match[2]}`);
         }
     }
     
@@ -534,14 +689,13 @@ function extraerNumeroVuelo(text) {
 function extraerAsiento(text) {
     // Buscar patrones: 23A, 14F, SEAT 12C
     const patrones = [
-        /(\d{1,2}[A-F])\b/,
-        /SEAT\s*[:]?\s*(\d{1,2}[A-F])/i,
-        /ASIENTO\s*[:]?\s*(\d{1,2}[A-F])/i
+        /\b(?:SEAT|ASIENTO|SITZ|POSTO|PLACE)\s*[:#\-]?\s*([0-9OISB]{1,3}\s?[A-Z])\b/i,
+        /\b([0-9OISB]{1,3}\s?[A-F])\b/
     ];
     
     for (let patron of patrones) {
         const match = text.match(patron);
-        if (match) return match[1];
+        if (match) return normalizeSeatCode(match[1]);
     }
     
     return "---";
@@ -725,9 +879,8 @@ function resolverFechaVueloISO(dateText) {
 
 function extraerDatosRuta(text) {
     const codigosAeropuertos = Object.keys(airportDatabase);
-    const encontrados = codigosAeropuertos.filter(codigo => 
-        text.includes(codigo) || text.includes(codigo.toLowerCase())
-    );
+    const tokens = text.match(/\b[A-Z]{3}\b/g) || [];
+    const encontrados = tokens.filter((codigo, index) => codigosAeropuertos.includes(codigo) && tokens.indexOf(codigo) === index);
     
     if (encontrados.length >= 2) {
         return {
@@ -744,11 +897,135 @@ function extraerDatosRuta(text) {
     };
 }
 
+function normalizeFlightNumber(value) {
+    const compact = String(value || "").toUpperCase().replace(/[^A-Z0-9]/g, "");
+    const prefix = compact.slice(0, 2).replace(/0/g, "O").replace(/1/g, "I");
+    const suffix = compact.slice(2).replace(/O/g, "0").replace(/I|L/g, "1").replace(/S/g, "5").replace(/B/g, "8");
+    return `${prefix}${suffix}`;
+}
+
+function normalizeSeatCode(value) {
+    const compact = String(value || "").toUpperCase().replace(/\s+/g, "");
+    const match = compact.match(/^([0-9OISB]{1,3})([A-Z])$/);
+    if (!match) return compact;
+    return `${match[1].replace(/O/g, "0").replace(/I|L/g, "1").replace(/S/g, "5").replace(/B/g, "8")}${match[2]}`;
+}
+
+function getKeywordValue(text, keywords, valuePattern = "([A-Z0-9][A-Z0-9\\s\\-]{1,28})") {
+    for (const keyword of keywords) {
+        const pattern = new RegExp(`\\b${keyword}\\s*[:#\\-]?\\s*${valuePattern}`, "i");
+        const match = text.match(pattern);
+        if (match?.[1]) return match[1].trim().replace(/\s{2,}/g, " ");
+    }
+    return "";
+}
+
+function extraerOperadoraTren(text) {
+    const operators = ["RENFE", "AVLO", "OUIGO", "ITALO", "TRENITALIA", "SNCF"];
+    const found = operators.find(operator => new RegExp(`\\b${operator}\\b`, "i").test(text));
+    return found || getKeywordValue(text, ["OPERADORA", "OPERATOR", "COMPAGNIA", "CARRIER"]) || "Operadora no identificada";
+}
+
+function extraerNumeroTren(text) {
+    const direct = getKeywordValue(text, ["TRAIN", "TREN", "TRENO", "N(?:UMERO)?\\s*TREN", "TRAIN\\s*NO", "NO\\s*TREN"], "([A-Z]{0,3}\\s?[0-9OISB]{2,6})");
+    if (direct) return direct.toUpperCase().replace(/\s+/g, "").replace(/O/g, "0").replace(/I|L/g, "1").replace(/S/g, "5").replace(/B/g, "8");
+
+    const match = text.match(/\b(?:AVE|AVLO|OUIGO|ITALO|FRECCIAROSSA|FR|IC|EC|TGV)?\s?([0-9OISB]{3,6})\b/i);
+    return match ? match[0].toUpperCase().replace(/\s+/g, "").replace(/O/g, "0").replace(/I|L/g, "1").replace(/S/g, "5").replace(/B/g, "8") : "---";
+}
+
+function extraerDatosRutaTren(text) {
+    const stationNames = [
+        "MADRID", "BARCELONA", "VALENCIA", "SEVILLA", "MALAGA", "ZARAGOZA", "ALICANTE", "CORDOBA", "GIRONA",
+        "ROMA", "MILANO", "MILAN", "FIRENZE", "FLORENCE", "VENEZIA", "NAPOLI", "TURIN", "TORINO",
+        "PARIS", "LYON", "MARSEILLE", "NICE", "TOULOUSE", "BORDEAUX", "LILLE", "MONTPELLIER"
+    ];
+
+    const origin = getKeywordValue(text, ["ORIGEN", "FROM", "DEPARTURE", "SALIDA", "PARTENZA"], "([A-ZÀ-Ü\\s\\-]{3,32})");
+    const destination = getKeywordValue(text, ["DESTINO", "TO", "ARRIVAL", "LLEGADA", "ARRIVO"], "([A-ZÀ-Ü\\s\\-]{3,32})");
+    if (origin && destination) {
+        return {
+            origin: cleanStationName(origin),
+            destination: cleanStationName(destination),
+            route: `${cleanStationName(origin)} → ${cleanStationName(destination)}`
+        };
+    }
+
+    const found = stationNames.filter(name => new RegExp(`\\b${name}\\b`, "i").test(text));
+    if (found.length >= 2) {
+        return { origin: found[0], destination: found[1], route: `${found[0]} → ${found[1]}` };
+    }
+
+    return { origin: "---", destination: "---", route: "---" };
+}
+
+function cleanStationName(value) {
+    return String(value || "")
+        .replace(/\b(TRAIN|TREN|TRENO|DATE|FECHA|HORA|TIME|SEAT|ASIENTO|VAGON|COACH)\b.*$/i, "")
+        .trim()
+        .replace(/\s{2,}/g, " ");
+}
+
+function extraerHorasTren(text) {
+    const departure = getKeywordValue(text, ["SALIDA", "DEPARTURE", "DEP", "PARTENZA"], "([0-2]?[0-9][:.][0-5][0-9])");
+    const arrival = getKeywordValue(text, ["LLEGADA", "ARRIVAL", "ARR", "ARRIVO"], "([0-2]?[0-9][:.][0-5][0-9])");
+    const times = Array.from(text.matchAll(/\b([0-2]?[0-9][:.][0-5][0-9])\b/g)).map(match => match[1].replace(".", ":").padStart(5, "0"));
+
+    return {
+        departure: (departure || times[0] || "").replace(".", ":").padStart(5, "0"),
+        arrival: (arrival || times[1] || "").replace(".", ":").padStart(5, "0")
+    };
+}
+
+function extraerVagonTren(text) {
+    const value = getKeywordValue(text, ["VAGON", "VAGÓN", "COACH", "CAR", "VOITURE", "CARROZZA"], "([A-Z0-9]{1,4})");
+    return value ? value.toUpperCase() : "---";
+}
+
+function extraerAsientoTren(text) {
+    const value = getKeywordValue(text, ["ASIENTO", "SEAT", "POSTO", "PLACE", "SITZ"], "([0-9OISB]{1,3}[A-Z]?)");
+    return value ? normalizeSeatCode(value) : "---";
+}
+
+function extraerClaseTren(text) {
+    if (/\b(BUSINESS|PREFERENTE|COMFORT|PRIMA|EXECUTIVE)\b/i.test(text)) return "Business";
+    if (/\b(STANDARD|TURISTA|SMART|BASIC|ESSENTIAL|SEGUNDA|2A|2ª)\b/i.test(text)) return "Standard";
+    if (/\b(PRIMERA|FIRST|1A|1ª)\b/i.test(text)) return "First";
+    return "Standard";
+}
+
+function extraerAndenTren(text) {
+    const value = getKeywordValue(text, ["ANDEN", "ANDÉN", "PLATFORM", "BINARIO", "VOIE"], "([A-Z0-9]{1,4})");
+    return value ? value.toUpperCase() : "---";
+}
+
+function extraerDuracionTren(text, times) {
+    const direct = text.match(/\b(?:DURATION|DURACION|DURACIÓN|DURATA)\s*[:\-]?\s*([0-9]{1,2}\s?H(?:\s?[0-9]{1,2}\s?M)?|[0-9]{1,3}\s?MIN)\b/i);
+    if (direct?.[1]) return direct[1].toUpperCase().replace(/\s+/g, " ");
+
+    if (times?.departure && times?.arrival) {
+        const [dh, dm] = times.departure.split(":").map(Number);
+        const [ah, am] = times.arrival.split(":").map(Number);
+        let minutes = (ah * 60 + am) - (dh * 60 + dm);
+        if (minutes < 0) minutes += 24 * 60;
+        const h = Math.floor(minutes / 60);
+        const m = minutes % 60;
+        return `${h}h ${m}m`;
+    }
+
+    return "---";
+}
+
 // ==========================================
 // ACTUALIZAR PANTALLA CON DATOS DEL VUELO
 // ==========================================
 function actualizarPantalla() {
     currentFlight.flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
+
+    if (currentFlight.transportType === "train") {
+        actualizarPantallaTren();
+        return;
+    }
 
     // Datos básicos
     setText("flight", `🛫 ${currentFlight.flight}`);
@@ -759,6 +1036,7 @@ function actualizarPantalla() {
     setText("baggage", `🧳 ${currentFlight.baggage || '1 PC incluido'}`);
     setText("date", `📅 ${currentFlight.date}`);
     setText("gate", `🚪 ${currentFlight.gate || '---'}`);
+    updateJourneyPanel();
     actualizarChecklistVuelo();
     ensureFlightPackingList();
     renderPackingChecklist();
@@ -784,6 +1062,64 @@ function actualizarPantalla() {
     enriquecerDatosVuelo();
 }
 
+function actualizarPantallaTren() {
+    setText("flight", `🚆 ${currentFlight.trainNumber || currentFlight.flight || "---"}`);
+    setText("route", `📍 ${currentFlight.route || "---"}`);
+    setText("seat", `💺 ${currentFlight.coach && currentFlight.coach !== "---" ? `Vagón ${currentFlight.coach} · ` : ""}${currentFlight.seat || "---"}`);
+    setText("terminal", `🛤️ Andén ${currentFlight.gate || "---"}`);
+    setText("flightClass", `🎟️ ${currentFlight.trainClass || currentFlight.flightClass || "Standard"}`);
+    setText("baggage", "🧳 Equipaje según tarifa ferroviaria");
+    setText("date", `📅 ${currentFlight.date || "---"}`);
+    setText("gate", `🛤️ ${currentFlight.gate || "---"}`);
+    setText("airline", `🏢 ${currentFlight.operatorName || "Operadora no identificada"}`);
+    setText("aircraft", "🚆 Tren");
+    setText("duration", `⏱️ ${currentFlight.durationText || "---"}`);
+    setText("distance", "📏 Ruta ferroviaria");
+    setText("weather", "🌤️ Disponible si consultas el destino con conexión");
+    setText("timezone", `🕐 Salida ${currentFlight.departureTime || "---"} · Llegada ${currentFlight.arrivalTime || "---"}`);
+    setText("flightPathText", `🚆 ${currentFlight.route || "Ruta ferroviaria"}`);
+    setText("distanceDisplay", "---");
+    setText("durationDisplay", currentFlight.durationText || "---");
+    updateJourneyPanel();
+    actualizarChecklistVuelo();
+    ensureFlightPackingList();
+    renderPackingChecklist();
+    renderAssistantState(
+        "Billete de tren detectado con datos principales guardados para usar offline.",
+        "Journey Cockpit",
+        [{ label: "Tren" }, { label: currentFlight.operatorName || "Operadora" }],
+        [{
+            title: "Código guardado",
+            detail: currentFlight.qrRaw ? "El código del billete queda guardado como recuerdo del viaje." : "No se detectó código visual, pero se guardó el texto leído.",
+            icon: "🔳",
+            severity: "success"
+        }],
+        [{
+            title: "Datos ferroviarios",
+            detail: `Tren ${currentFlight.trainNumber || "---"} · ${currentFlight.route || "---"}`
+        }]
+    );
+}
+
+function updateJourneyPanel() {
+    const isTrain = currentFlight.transportType === "train";
+    setText("journeyType", `Tipo: ${isTrain ? "Tren" : "Vuelo"}`);
+    setText("journeyOperator", `Operadora: ${isTrain ? (currentFlight.operatorName || "---") : (currentFlight.airlineName || "---")}`);
+    setText("journeyNumber", `Número: ${isTrain ? (currentFlight.trainNumber || currentFlight.flight || "---") : (currentFlight.flight || "---")}`);
+    setText("journeyRoute", `Origen / destino: ${currentFlight.route || "---"}`);
+    setText("journeyTimes", `Salida / llegada: ${currentFlight.departureTime || "---"} / ${currentFlight.arrivalTime || currentFlight.boardingTime || "---"}`);
+    setText("journeySeat", `Vagón / asiento: ${isTrain ? `${currentFlight.coach || "---"} / ${currentFlight.seat || "---"}` : `--- / ${currentFlight.seat || "---"}`}`);
+    setText("journeyClass", `Clase: ${currentFlight.trainClass || currentFlight.flightClass || "---"}`);
+    setText("journeyPlatform", `Andén / puerta: ${isTrain ? (currentFlight.gate || "---") : (currentFlight.gate || "---")}`);
+    setText("journeyQrMemory", `Código QR: ${formatQrMemory(currentFlight.qrRaw)}`);
+}
+
+function formatQrMemory(value) {
+    if (!value) return "---";
+    const compact = String(value).replace(/\s+/g, " ").trim();
+    return compact.length > 80 ? `${compact.slice(0, 80)}...` : compact;
+}
+
 async function enriquecerDatosVuelo() {
     // Detectar aerolínea
     const codigoAerolinea = currentFlight.flight.substring(0, 2);
@@ -800,6 +1136,7 @@ async function enriquecerDatosVuelo() {
         setText("airline", "🏢 Desconocida");
         setText("aircraft", "✈️ No identificado");
     }
+    updateJourneyPanel();
     
     // Calcular datos de ruta
     calcularDatosRuta();
@@ -2938,6 +3275,7 @@ function reproducirSonido(tipo) {
 function cargarVueloDemo() {
     const tomorrow = sumarDias(inicioDelDia(new Date()), 1);
     currentFlight = {
+        transportType: "flight",
         flight: "VY8432",
         route: "MAD → MXP",
         origin: "MAD",
@@ -2964,7 +3302,7 @@ function cargarVueloDemo() {
 // ==========================================
 function saveFlight() {
     if (!currentFlight.flight || currentFlight.flight === "---") {
-        mostrarNotificacion('No hay vuelo para guardar', 'warning');
+        mostrarNotificacion('No hay viaje para guardar', 'warning');
         return;
     }
     
@@ -2987,7 +3325,7 @@ function saveFlight() {
     updatePassportStamps();
     updateDetailedWeatherWidgets();
     
-    mostrarNotificacion('✅ Vuelo guardado en el Logbook', 'success');
+    mostrarNotificacion(`✅ ${currentFlight.transportType === "train" ? "Tren" : "Vuelo"} guardado en el Logbook`, 'success');
 }
 
 function loadHistory() {
@@ -2995,23 +3333,24 @@ function loadHistory() {
     let html = "";
     
     if (history.length === 0) {
-        html = '<p>📭 No hay vuelos guardados</p>';
+        html = '<p>📭 No hay viajes guardados</p>';
     } else {
         history.slice(-12).reverse().forEach((f, index) => {
             const fecha = f.date || 'Fecha desconocida';
             const ruta = f.route || 'Ruta no disponible';
             const asiento = f.seat || '---';
             const clase = f.flightClass || 'Turista';
+            const isTrain = f.transportType === "train";
             html += `
                 <div class="history-item" onclick="cargarVueloGuardado(${history.length - 1 - index})">
                     <div class="history-header">
-                        <strong>✈️ ${f.flight}</strong>
+                        <strong>${isTrain ? "🚆" : "✈️"} ${f.flight}</strong>
                         <span>${fecha}</span>
                     </div>
                     <div class="history-details">
                         <span>📍 ${ruta}</span>
-                        <span>🎟️ ${clase} · 💺 ${asiento}</span>
-                        <span>🛅 ${f.terminal || '---'} · 🚪 ${f.gate || '---'}</span>
+                        <span>🎟️ ${clase} · 💺 ${isTrain ? `${f.coach || '---'} / ${asiento}` : asiento}</span>
+                        <span>${isTrain ? `🛤️ Andén ${f.gate || '---'}` : `🛅 ${f.terminal || '---'} · 🚪 ${f.gate || '---'}`}</span>
                     </div>
                 </div>
             `;
@@ -3116,7 +3455,7 @@ function cargarVueloGuardado(index) {
         currentFlight = history[index];
         currentFlight.flightDate = currentFlight.flightDate || resolverFechaVueloISO(currentFlight.date);
         actualizarPantalla();
-        mostrarNotificacion(`📂 Vuelo ${currentFlight.flight} cargado`, 'info');
+        mostrarNotificacion(`📂 ${currentFlight.transportType === "train" ? "Tren" : "Vuelo"} ${currentFlight.flight} cargado`, 'info');
     }
 }
 
@@ -3154,6 +3493,7 @@ function getOfflineSnapshot() {
         flights: JSON.parse(localStorage.getItem("flights") || "[]"),
         upcomingFlights: JSON.parse(localStorage.getItem("upcomingFlights") || "[]"),
         uploadedBoardingPasses: JSON.parse(localStorage.getItem("uploadedBoardingPasses") || "[]"),
+        uploadedJourneys: JSON.parse(localStorage.getItem("uploadedJourneys") || "[]"),
         tripExpenses: JSON.parse(localStorage.getItem("tripExpenses") || "[]"),
         packingChecklist: currentFlight.packingChecklist || getDefaultPackingChecklist(),
         airportsAvailable: Object.keys(airportDatabase).length
