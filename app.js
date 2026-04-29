@@ -448,8 +448,126 @@ const airportDatabase = {
     HAV: { lat: 22.9892, lng: -82.4091, nombre: 'La Habana', ciudad: 'La Habana', pais: 'Cuba' },
     PUJ: { lat: 18.5674, lng: -68.3634, nombre: 'Punta Cana', ciudad: 'Punta Cana', pais: 'República Dominicana' },
     SDQ: { lat: 18.4297, lng: -69.6689, nombre: 'Santo Domingo', ciudad: 'Santo Domingo', pais: 'República Dominicana' },
-    SJU: { lat: 18.4394, lng: -66.0018, nombre: 'San Juan', ciudad: 'San Juan', pais: 'Puerto Rico' }
+    SJU: { lat: 18.4394, lng: -66.0018, nombre: 'San Juan', ciudad: 'San Juan', pais: 'Puerto Rico' },
+
+    // África
+    CAI: { lat: 30.1120, lng: 31.3999, nombre: 'El Cairo', ciudad: 'El Cairo', pais: 'Egipto' },
+    JNB: { lat: -26.1337, lng: 28.2420, nombre: 'Johannesburgo O.R. Tambo', ciudad: 'Johannesburgo', pais: 'Sudáfrica' },
+    CPT: { lat: -33.9696, lng: 18.5976, nombre: 'Ciudad del Cabo', ciudad: 'Ciudad del Cabo', pais: 'Sudáfrica' },
+    NBO: { lat: -1.3192, lng: 36.9275, nombre: 'Nairobi Jomo Kenyatta', ciudad: 'Nairobi', pais: 'Kenia' },
+    CMN: { lat: 33.3675, lng: -7.5899, nombre: 'Casablanca Mohammed V', ciudad: 'Casablanca', pais: 'Marruecos' },
+    LOS: { lat: 6.5774, lng: 3.3212, nombre: 'Lagos Murtala Muhammed', ciudad: 'Lagos', pais: 'Nigeria' },
+    ACC: { lat: 5.6052, lng: -0.1668, nombre: 'Accra Kotoka', ciudad: 'Accra', pais: 'Ghana' },
+    DAR: { lat: -6.8781, lng: 39.2026, nombre: 'Dar es Salaam', ciudad: 'Dar es Salaam', pais: 'Tanzania' },
+    TUN: { lat: 36.8510, lng: 10.2270, nombre: 'Túnez-Cartago', ciudad: 'Túnez', pais: 'Túnez' },
+    KGL: { lat: -1.9686, lng: 30.1394, nombre: 'Kigali', ciudad: 'Kigali', pais: 'Ruanda' }
 };
+
+const airportSearchCache = new Map();
+
+async function resolveAirportByCode(code) {
+    if (!code || typeof code !== 'string') return null;
+    const normalized = code.trim().toUpperCase();
+    if (airportDatabase[normalized]) {
+        return airportDatabase[normalized];
+    }
+    if (airportSearchCache.has(normalized)) {
+        return airportSearchCache.get(normalized);
+    }
+
+    let resolved = await lookupAirportWithOpenMeteo(normalized);
+    if (!resolved) {
+        resolved = await lookupAirportWithNominatim(normalized);
+    }
+
+    if (resolved) {
+        airportDatabase[normalized] = resolved;
+        airportSearchCache.set(normalized, resolved);
+        return resolved;
+    }
+
+    airportSearchCache.set(normalized, null);
+    return null;
+}
+
+async function lookupAirportWithOpenMeteo(code) {
+    try {
+        const query = encodeURIComponent(`${code} airport`);
+        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${query}&count=5&language=es`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+
+        if (!Array.isArray(data.results) || !data.results.length) return null;
+        const airport = data.results.find(item => /airport|aeropuerto|aeródromo|aerodrome/i.test(item.name + ' ' + (item.type || '')))
+            || data.results[0];
+
+        return {
+            lat: Number(airport.latitude),
+            lng: Number(airport.longitude),
+            nombre: airport.name || code,
+            ciudad: airport.admin1 || airport.country || '',
+            pais: airport.country || 'Desconocido'
+        };
+    } catch (error) {
+        console.warn('OpenMeteo airport lookup failed:', error);
+        return null;
+    }
+}
+
+async function lookupAirportWithNominatim(code) {
+    try {
+        const query = encodeURIComponent(`${code} airport`);
+        const url = `https://nominatim.openstreetmap.org/search?q=${query}&format=json&limit=3&addressdetails=1`;
+        const response = await fetch(url, {
+            headers: { 'Accept-Language': 'es' }
+        });
+        if (!response.ok) return null;
+        const results = await response.json();
+        if (!Array.isArray(results) || !results.length) return null;
+
+        const match = results.find(item => /aerodrome|airport|aeropuerto|aeródromo/i.test(item.display_name + ' ' + (item.type || '') + ' ' + (item.class || '')))
+            || results[0];
+
+        const address = match.address || {};
+        return {
+            lat: Number(match.lat),
+            lng: Number(match.lon),
+            nombre: match.display_name.split(',')[0] || code,
+            ciudad: address.city || address.town || address.village || address.state || '',
+            pais: address.country || 'Desconocido'
+        };
+    } catch (error) {
+        console.warn('Nominatim airport lookup failed:', error);
+        return null;
+    }
+}
+
+async function ensureAirportData(flight) {
+    if (!flight || !flight.origin || !flight.destination) return false;
+    const originCode = flight.origin.trim().toUpperCase();
+    const destinationCode = flight.destination.trim().toUpperCase();
+    let originResolved = airportDatabase[originCode];
+    let destinationResolved = airportDatabase[destinationCode];
+
+    if (!originResolved) {
+        originResolved = await resolveAirportByCode(originCode);
+    }
+    if (!destinationResolved) {
+        destinationResolved = await resolveAirportByCode(destinationCode);
+    }
+
+    if (originResolved && destinationResolved) {
+        flight.distanceKm = Math.round(calcularDistancia(
+            originResolved.lat,
+            originResolved.lng,
+            destinationResolved.lat,
+            destinationResolved.lng
+        ));
+        return true;
+    }
+    return false;
+}
 
 // ==========================================
 // BASE DE DATOS DE AEROLÍNEAS
@@ -609,11 +727,6 @@ async function processBoardingPassFile(file) {
         mostrarEstadoCarga(false);
         setText("flight", "❌ Error al procesar");
         mostrarNotificacion('Error al leer el billete. Prueba con más luz y el documento bien enfocado.', 'error');
-        
-        // Cargar vuelo demo
-        setTimeout(() => {
-            cargarVueloDemo();
-        }, 1000);
     }
 }
 
@@ -3490,29 +3603,14 @@ function buildManualFlight() {
     const airlineCode = flightNumber.slice(0, 2);
     const airline = airlineDatabase[airlineCode];
 
-    // Validar que los códigos de aeropuerto existan en la base de datos
-    if (origin !== "---" && destination !== "---") {
-        if (!airportDatabase[origin]) {
-            mostrarNotificacion(`El código de origen '${origin}' no existe en la base de datos de aeropuertos`, "error");
-            return null;
-        }
-        if (!airportDatabase[destination]) {
-            mostrarNotificacion(`El código de destino '${destination}' no existe en la base de datos de aeropuertos`, "error");
-            return null;
-        }
+    if (origin && origin !== "---" && origin.length !== 3) {
+        mostrarNotificacion("Introduce un código IATA de aeropuerto válido (3 letras) para el origen.", "warning");
+        return null;
     }
 
-    // Calcular distancia si ambos aeropuertos existen
-    let distanceKm = 0;
-    if (origin !== "---" && destination !== "---" && airportDatabase[origin] && airportDatabase[destination]) {
-        const originData = airportDatabase[origin];
-        const destinationData = airportDatabase[destination];
-        distanceKm = Math.round(calcularDistancia(
-            originData.lat,
-            originData.lng,
-            destinationData.lat,
-            destinationData.lng
-        ));
+    if (destination && destination !== "---" && destination.length !== 3) {
+        mostrarNotificacion("Introduce un código IATA de aeropuerto válido (3 letras) para el destino.", "warning");
+        return null;
     }
 
     return {
@@ -3534,7 +3632,7 @@ function buildManualFlight() {
         boardingTime: "",
         date: formatManualDate(dateValue),
         flightDate: dateValue || formatearFechaISO(new Date()),
-        distanceKm: distanceKm,
+        distanceKm: 0,
         rawText: "MANUAL FLIGHT ENTRY",
         qrRaw: ""
     };
@@ -3571,12 +3669,11 @@ function buildManualTrain() {
     };
 }
 
-function handleManualTripSubmit(event) {
+async function handleManualTripSubmit(event) {
     event.preventDefault();
     const type = document.querySelector('input[name="manualTripType"]:checked')?.value || "flight";
     currentFlight = type === "train" ? buildManualTrain() : buildManualFlight();
 
-    // Si buildManualFlight retorna null, significa que hay un error de validación
     if (!currentFlight) {
         return;
     }
@@ -3587,7 +3684,7 @@ function handleManualTripSubmit(event) {
     }
 
     actualizarPantalla();
-    saveFlight();
+    await saveFlight();
     document.getElementById("manualTripForm")?.reset();
     updateManualTripFields();
     closeManualTripModal();
@@ -3596,33 +3693,34 @@ function handleManualTripSubmit(event) {
 // ==========================================
 // GUARDAR Y CARGAR HISTORIAL
 // ==========================================
-function saveFlight() {
+async function saveFlight() {
     if (!currentFlight.flight || currentFlight.flight === "---") {
         mostrarNotificacion('No hay viaje para guardar', 'warning');
         return;
     }
-    
+
     ensureFlightPackingList();
+    await ensureAirportData(currentFlight);
     updateConversionSummary();
-    
+
     let history = JSON.parse(localStorage.getItem("flights")) || [];
-    
+
     // Añadir timestamp
     currentFlight.savedAt = new Date().toISOString();
     const currentKey = getFlightUniqueKey(currentFlight);
     history = history.filter(item => getFlightUniqueKey(item) !== currentKey);
     history.push(currentFlight);
-    
+
     // Mantener solo últimos 50 vuelos
     if (history.length > 50) history = history.slice(-50);
-    
+
     localStorage.setItem("flights", JSON.stringify(history));
-    loadHistory();
+    await loadHistory();
     updateStats();
     updateAirportsHistory();
     updatePassportStamps();
     updateDetailedWeatherWidgets();
-    
+
     mostrarNotificacion(`✅ ${currentFlight.transportType === "train" ? "Tren" : "Vuelo"} guardado en el Logbook`, 'success');
 }
 
@@ -3638,7 +3736,7 @@ function getFlightUniqueKey(flight) {
     ].join("|").toUpperCase();
 }
 
-function loadHistory() {
+async function loadHistory() {
     let history = JSON.parse(localStorage.getItem("flights")) || [];
     let html = "";
     
@@ -3673,7 +3771,7 @@ function loadHistory() {
     document.getElementById("historyList").innerHTML = html;
     updateDeleteTripsControls();
     renderHistorySummary(history);
-    renderHistoryMap(history);
+    await renderHistoryMap(history);
 }
 
 function requestDeleteTripsPassword(message) {
@@ -3776,7 +3874,7 @@ function renderHistorySummary(history) {
     setText("historyCountriesCount", formatNumber(countries.size));
 }
 
-function renderHistoryMap(history) {
+async function renderHistoryMap(history) {
     if (!document.getElementById('historyMap')) return;
 
     if (!historyMap) {
@@ -3796,11 +3894,14 @@ function renderHistoryMap(history) {
     const colors = ['#ffb248', '#4facff', '#7ef1d1', '#ff7a78', '#9b59ff', '#65a7ff'];
     const bounds = [];
 
-    history.forEach((flight, index) => {
+    for (let index = 0; index < history.length; index += 1) {
+        const flight = history[index];
+        await ensureAirportData(flight);
+
         const origin = airportDatabase[flight.origin];
         const destination = airportDatabase[flight.destination];
 
-        if (!origin || !destination) return;
+        if (!origin || !destination) continue;
 
         const color = colors[index % colors.length];
         const path = [[origin.lat, origin.lng], [destination.lat, destination.lng]];
@@ -3834,7 +3935,7 @@ function renderHistoryMap(history) {
         historyMarkers.push(destinationMarker);
 
         bounds.push([origin.lat, origin.lng], [destination.lat, destination.lng]);
-    });
+    }
 
     if (bounds.length) {
         historyMap.fitBounds(bounds, { padding: [40, 40], maxZoom: 4 });
@@ -3970,12 +4071,12 @@ async function toggleNetworkMode() {
 // ==========================================
 // EVENT LISTENERS
 // ==========================================
-document.addEventListener('DOMContentLoaded', function() {
+document.addEventListener('DOMContentLoaded', async function() {
     // Inicializar mapa
     inicializarMapa();
     
     // Cargar historial
-    loadHistory();
+    await loadHistory();
     updateStats();
     updateAirportsHistory();
     renderUpcomingPlanner();
@@ -4245,14 +4346,7 @@ document.addEventListener('DOMContentLoaded', function() {
     if (useFlightTimeCheckbox && useFlightTimeCheckbox.checked) {
         document.querySelector('.arrival-fields').style.display = 'none';
     }
-    
-    // Cargar vuelo demo después de 1 segundo
-    setTimeout(() => {
-        if (!currentFlight.flight || currentFlight.flight === "---") {
-            cargarVueloDemo();
-        }
-    }, 1000);
-    
+
     console.log('🚀 Sistema de Cockpit de Vuelo inicializado');
     syncChecklistStyles();
 });
