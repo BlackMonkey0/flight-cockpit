@@ -206,6 +206,12 @@
               <h3>Conversor de Moneda y Medidas</h3>
               <button type="button" id="updateConversionBtn" class="small-btn">💰 Actualizar tasas</button>
             </div>
+            <div class="country-selector">
+              <label for="destinationCountry">🌍 País de destino:</label>
+              <select id="destinationCountry" aria-label="Seleccionar país de destino">
+                <option value="">-- Selecciona un país --</option>
+              </select>
+            </div>
             <div id="conversionSummary" class="conversion-summary"></div>
           </div>
         </div>
@@ -369,7 +375,14 @@
     </section>
 
     <section class="history" aria-label="Historial de vuelos">
-      <h2>LOGBOOK</h2>
+      <div class="history-toolbar">
+        <h2>LOGBOOK</h2>
+        <div class="history-delete-actions">
+          <button type="button" id="enableDeleteTripsBtn">Borrar viajes</button>
+          <button type="button" id="confirmDeleteTripsBtn" hidden>Confirmar borrado</button>
+          <button type="button" id="cancelDeleteTripsBtn" hidden>Salir</button>
+        </div>
+      </div>
       <div class="history-summary-grid">
         <div class="history-metric">
           <strong id="historyFlightCount">0</strong>

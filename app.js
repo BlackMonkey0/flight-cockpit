@@ -28,6 +28,9 @@ let speedMultiplier = 1; // 1 = tiempo real, 2 = 2x velocidad, etc.
 let tripExpenses = []; // Array de gastos del viaje
 let expensesChart = null; // Instancia del gráfico
 const weatherDetailCache = new Map();
+const DELETE_TRIPS_PASSWORD = "BORRAR";
+let deleteTripsMode = false;
+const tripsPendingDelete = new Set();
 const checklistIds = [
     "taskBaggageReady",
     "taskCheckinDone",
@@ -125,25 +128,110 @@ function updateConversionSummary() {
   if (!container) return;
   ensureFlightPackingList();
 
-  const temperatureC = 14;
-  const temperatureF = convertCelsiusToFahrenheit(temperatureC);
-  const distance = currentFlight.distanceKm || 100;
-  const distanceLabel = `${distance} km`;
-  const milesLabel = `${convertKmToMiles(distance)} millas`;
-  const isItaly = isItalyFlight();
-
-  container.innerHTML = `
-    <p>${isItaly ? 'Conversor para Italia' : 'Conversor de referencia para vuelos a Italia.'}</p>
-    <ul>
-      <li>1 EUR = 1 EUR</li>
-      <li>100 EUR = 100 EUR</li>
-      <li>Temperatura: ${temperatureC}°C = ${temperatureF}°F</li>
-      <li>Distancia: ${distanceLabel} = ${milesLabel}</li>
-    </ul>
-    <small class="conversion-note">${isItaly ? 'Tasas actualizadas para vuelo italiano.' : 'Añade un vuelo con origen o destino en Italia para ver la conversión completa.'}</small>
-  `;
+  const select = document.getElementById("destinationCountry");
+  const selectedCountry = select ? select.value : "";
+  
+  // Si hay un país seleccionado, mostrar datos de ese país
+  if (selectedCountry && countryDatabase[selectedCountry]) {
+    const country = countryDatabase[selectedCountry];
+    const temperatureC = parseFloat(country.temperatura) || 14;
+    const temperatureF = convertCelsiusToFahrenheit(temperatureC);
+    const distance = currentFlight.distanceKm || 100;
+    const distanceLabel = `${distance} km`;
+    const milesLabel = `${convertKmToMiles(distance)} millas`;
+    
+    // Conversión de moneda (EUR a la moneda del país)
+    const exchangeRate = getExchangeRate('EUR', country.moneda);
+    const eurAmount = 100;
+    const convertedAmount = (eurAmount * exchangeRate).toFixed(2);
+    
+    container.innerHTML = `
+      <div class="country-data">
+        <p>📍 Viajando a <strong>${selectedCountry}</strong></p>
+        <ul>
+          <li><strong>Capital:</strong> ${country.capital}</li>
+          <li><strong>Población:</strong> ${country.poblacion}</li>
+          <li><strong>Idiomas:</strong> ${country.idiomas.join(', ')}</li>
+          <li><strong>Zona horaria:</strong> ${country.zonaHoraria}</li>
+        </ul>
+        <div class="conversion-rates">
+          <strong>💱 Conversión de Moneda:</strong>
+          <ul>
+            <li>1 EUR = ${exchangeRate.toFixed(3)} ${country.simbolo}</li>
+            <li>${eurAmount} EUR = ${convertedAmount} ${country.simbolo}</li>
+          </ul>
+        </div>
+        <div class="conversion-measurements">
+          <strong>📐 Medidas:</strong>
+          <ul>
+            <li>Temperatura: ${temperatureC}°C = ${temperatureF}°F</li>
+            <li>Distancia: ${distanceLabel} = ${milesLabel}</li>
+          </ul>
+        </div>
+        <small class="conversion-note">Tasas actualizadas para ${selectedCountry} en tiempo real.</small>
+      </div>
+    `;
+  } else {
+    // Mostrar conversor de referencia si no hay país seleccionado
+    const temperatureC = 14;
+    const temperatureF = convertCelsiusToFahrenheit(temperatureC);
+    const distance = currentFlight.distanceKm || 100;
+    const distanceLabel = `${distance} km`;
+    const milesLabel = `${convertKmToMiles(distance)} millas`;
+    
+    container.innerHTML = `
+      <p>Selecciona un país para ver la conversión de moneda y otros datos locales.</p>
+      <ul>
+        <li>1 EUR = 1 EUR</li>
+        <li>100 EUR = 100 EUR</li>
+        <li>Temperatura: ${temperatureC}°C = ${temperatureF}°F</li>
+        <li>Distancia: ${distanceLabel} = ${milesLabel}</li>
+      </ul>
+      <small class="conversion-note">Conversor de referencia para planificación de viajes.</small>
+    `;
+  }
 
   currentFlight.conversionUpdatedAt = new Date().toISOString();
+}
+
+function getExchangeRate(fromCurrency, toCurrency) {
+  // Tasas de cambio aproximadas (actualizadas a 2026)
+  const rates = {
+    'EUR': {
+      'EUR': 1,
+      'USD': 1.08,
+      'GBP': 0.86,
+      'CHF': 0.96,
+      'SEK': 11.35,
+      'NOK': 11.52,
+      'DKK': 7.46,
+      'PLN': 4.30,
+      'CZK': 24.50,
+      'HUF': 400.00,
+      'RON': 4.97,
+      'TRY': 35.20,
+      'CAD': 1.47,
+      'MXN': 20.50,
+      'COP': 4500.00,
+      'PEN': 4.02,
+      'BRL': 5.50,
+      'CLP': 950.00,
+      'ARS': 950.00,
+      'UYU': 42.50,
+      'PYG': 7800.00,
+      'BOB': 7.45,
+      'VES': 2420.00,
+      'RUB': 105.50,
+      'KRW': 1390.00,
+      'JPY': 160.50
+    }
+  };
+  
+  const fromRates = rates[fromCurrency];
+  if (!fromRates) return 1;
+  
+  const rate = fromRates[toCurrency];
+  return rate || 1;
 }
 
 function getSeatRecommendation() {
@@ -378,6 +466,62 @@ const airlineDatabase = {
     'BA': { nombre: 'British Airways', avion: 'Airbus A380', codigo: 'BAW' },
     'AF': { nombre: 'Air France', avion: 'Airbus A350', codigo: 'AFR' },
     'LH': { nombre: 'Lufthansa', avion: 'Boeing 747-8', codigo: 'DLH' }
+};
+
+// ==========================================
+// BASE DE DATOS DE PAÍSES
+// ==========================================
+const countryDatabase = {
+    // Europa
+    'España': { codigo: 'ES', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Español', 'Catalán', 'Gallego', 'Vasco'], capital: 'Madrid', poblacion: '47.6M', temperatura: '14°C' },
+    'Portugal': { codigo: 'PT', moneda: 'EUR', simbolo: '€', zonaHoraria: 'WET', idiomas: ['Portugués'], capital: 'Lisboa', poblacion: '10.4M', temperatura: '12°C' },
+    'Italia': { codigo: 'IT', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Italiano'], capital: 'Roma', poblacion: '58.9M', temperatura: '15°C' },
+    'Francia': { codigo: 'FR', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Francés'], capital: 'París', poblacion: '67.7M', temperatura: '11°C' },
+    'Reino Unido': { codigo: 'GB', moneda: 'GBP', simbolo: '£', zonaHoraria: 'GMT', idiomas: ['Inglés'], capital: 'Londres', poblacion: '67.2M', temperatura: '9°C' },
+    'Alemania': { codigo: 'DE', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Alemán'], capital: 'Berlín', poblacion: '83.4M', temperatura: '10°C' },
+    'Países Bajos': { codigo: 'NL', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Neerlandés'], capital: 'Ámsterdam', poblacion: '17.5M', temperatura: '10°C' },
+    'Bélgica': { codigo: 'BE', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Flamenco', 'Francés', 'Alemán'], capital: 'Bruselas', poblacion: '11.6M', temperatura: '10°C' },
+    'Suiza': { codigo: 'CH', moneda: 'CHF', simbolo: 'CHF', zonaHoraria: 'CET', idiomas: ['Alemán', 'Francés', 'Italiano', 'Romanche'], capital: 'Berna', poblacion: '8.7M', temperatura: '8°C' },
+    'Austria': { codigo: 'AT', moneda: 'EUR', simbolo: '€', zonaHoraria: 'CET', idiomas: ['Alemán'], capital: 'Viena', poblacion: '9.0M', temperatura: '9°C' },
+    'Grecia': { codigo: 'GR', moneda: 'EUR', simbolo: '€', zonaHoraria: 'EET', idiomas: ['Griego'], capital: 'Atenas', poblacion: '10.7M', temperatura: '16°C' },
+    'Irlanda': { codigo: 'IE', moneda: 'EUR', simbolo: '€', zonaHoraria: 'GMT', idiomas: ['Inglés', 'Irlandés'], capital: 'Dublín', poblacion: '5.0M', temperatura: '9°C' },
+    'Dinamarca': { codigo: 'DK', moneda: 'DKK', simbolo: 'kr', zonaHoraria: 'CET', idiomas: ['Danés'], capital: 'Copenhague', poblacion: '5.9M', temperatura: '8°C' },
+    'Suecia': { codigo: 'SE', moneda: 'SEK', simbolo: 'kr', zonaHoraria: 'CET', idiomas: ['Sueco'], capital: 'Estocolmo', poblacion: '10.5M', temperatura: '7°C' },
+    'Noruega': { codigo: 'NO', moneda: 'NOK', simbolo: 'kr', zonaHoraria: 'CET', idiomas: ['Noruego'], capital: 'Oslo', poblacion: '5.4M', temperatura: '6°C' },
+    'Finlandia': { codigo: 'FI', moneda: 'EUR', simbolo: '€', zonaHoraria: 'EET', idiomas: ['Finlandés', 'Sueco'], capital: 'Helsinki', poblacion: '5.5M', temperatura: '5°C' },
+    'Polonia': { codigo: 'PL', moneda: 'PLN', simbolo: 'zł', zonaHoraria: 'CET', idiomas: ['Polaco'], capital: 'Varsovia', poblacion: '37.7M', temperatura: '8°C' },
+    'Chequia': { codigo: 'CZ', moneda: 'CZK', simbolo: 'Kč', zonaHoraria: 'CET', idiomas: ['Checo'], capital: 'Praga', poblacion: '10.5M', temperatura: '9°C' },
+    'Hungría': { codigo: 'HU', moneda: 'HUF', simbolo: 'Ft', zonaHoraria: 'CET', idiomas: ['Húngaro'], capital: 'Budapest', poblacion: '9.7M', temperatura: '10°C' },
+    'Rumanía': { codigo: 'RO', moneda: 'RON', simbolo: 'lei', zonaHoraria: 'EET', idiomas: ['Rumano'], capital: 'Bucarest', poblacion: '19.0M', temperatura: '11°C' },
+    'Turquía': { codigo: 'TR', moneda: 'TRY', simbolo: '₺', zonaHoraria: 'EET', idiomas: ['Turco'], capital: 'Ankara', poblacion: '85.3M', temperatura: '13°C' },
+    
+    // Norteamérica
+    'EEUU': { codigo: 'US', moneda: 'USD', simbolo: '$', zonaHoraria: 'EST', idiomas: ['Inglés'], capital: 'Washington D.C.', poblacion: '331M', temperatura: '12°C' },
+    'Canadá': { codigo: 'CA', moneda: 'CAD', simbolo: '$', zonaHoraria: 'EST', idiomas: ['Inglés', 'Francés'], capital: 'Ottawa', poblacion: '38.2M', temperatura: '6°C' },
+    'México': { codigo: 'MX', moneda: 'MXN', simbolo: '$', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'Ciudad de México', poblacion: '128.9M', temperatura: '16°C' },
+    
+    // Sudamérica
+    'Colombia': { codigo: 'CO', moneda: 'COP', simbolo: '$', zonaHoraria: 'COT', idiomas: ['Español'], capital: 'Bogotá', poblacion: '51.9M', temperatura: '14°C' },
+    'Perú': { codigo: 'PE', moneda: 'PEN', simbolo: 'S/', zonaHoraria: 'PET', idiomas: ['Español', 'Quechua', 'Aymara'], capital: 'Lima', poblacion: '34.3M', temperatura: '16°C' },
+    'Ecuador': { codigo: 'EC', moneda: 'USD', simbolo: '$', zonaHoraria: 'ECT', idiomas: ['Español'], capital: 'Quito', poblacion: '18.0M', temperatura: '15°C' },
+    'Venezuela': { codigo: 'VE', moneda: 'VES', simbolo: 'Bs', zonaHoraria: 'VET', idiomas: ['Español'], capital: 'Caracas', poblacion: '28.3M', temperatura: '17°C' },
+    'Chile': { codigo: 'CL', moneda: 'CLP', simbolo: '$', zonaHoraria: 'CLT', idiomas: ['Español'], capital: 'Santiago', poblacion: '19.1M', temperatura: '14°C' },
+    'Argentina': { codigo: 'AR', moneda: 'ARS', simbolo: '$', zonaHoraria: 'ART', idiomas: ['Español'], capital: 'Buenos Aires', poblacion: '46.2M', temperatura: '17°C' },
+    'Uruguay': { codigo: 'UY', moneda: 'UYU', simbolo: '$', zonaHoraria: 'ART', idiomas: ['Español'], capital: 'Montevideo', poblacion: '3.4M', temperatura: '15°C' },
+    'Paraguay': { codigo: 'PY', moneda: 'PYG', simbolo: '₲', zonaHoraria: 'PYT', idiomas: ['Español', 'Guaraní'], capital: 'Asunción', poblacion: '6.8M', temperatura: '18°C' },
+    'Bolivia': { codigo: 'BO', moneda: 'BOB', simbolo: 'Bs.', zonaHoraria: 'BOT', idiomas: ['Español', 'Quechua'], capital: 'La Paz', poblacion: '12.2M', temperatura: '12°C' },
+    'Brasil': { codigo: 'BR', moneda: 'BRL', simbolo: 'R$', zonaHoraria: 'BRT', idiomas: ['Portugués'], capital: 'Brasilia', poblacion: '215.3M', temperatura: '18°C' },
+    
+    // Centroamérica y Caribe
+    'Panamá': { codigo: 'PA', moneda: 'PAB', simbolo: 'B/.', zonaHoraria: 'EST', idiomas: ['Español', 'Inglés'], capital: 'Ciudad de Panamá', poblacion: '4.4M', temperatura: '18°C' },
+    'Costa Rica': { codigo: 'CR', moneda: 'CRC', simbolo: '₡', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'San José', poblacion: '5.2M', temperatura: '18°C' },
+    'Guatemala': { codigo: 'GT', moneda: 'GTQ', simbolo: 'Q', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'Ciudad de Guatemala', poblacion: '18.1M', temperatura: '16°C' },
+    'El Salvador': { codigo: 'SV', moneda: 'SVC', simbolo: '₡', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'San Salvador', poblacion: '6.3M', temperatura: '17°C' },
+    'Honduras': { codigo: 'HN', moneda: 'HNL', simbolo: 'L', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'Tegucigalpa', poblacion: '10.1M', temperatura: '16°C' },
+    'Nicaragua': { codigo: 'NI', moneda: 'NIO', simbolo: 'C$', zonaHoraria: 'CST', idiomas: ['Español'], capital: 'Managua', poblacion: '7.1M', temperatura: '17°C' },
+    'Cuba': { codigo: 'CU', moneda: 'CUP', simbolo: '₱', zonaHoraria: 'EST', idiomas: ['Español'], capital: 'La Habana', poblacion: '11.2M', temperatura: '17°C' },
+    'República Dominicana': { codigo: 'DO', moneda: 'DOP', simbolo: 'RD$', zonaHoraria: 'EST', idiomas: ['Español'], capital: 'Santo Domingo', poblacion: '10.8M', temperatura: '17°C' },
+    'Puerto Rico': { codigo: 'PR', moneda: 'USD', simbolo: '$', zonaHoraria: 'EST', idiomas: ['Español', 'Inglés'], capital: 'San Juan', poblacion: '3.2M', temperatura: '17°C' }
 };
 
 const aviationQuizQuestions = [
@@ -3346,6 +3490,31 @@ function buildManualFlight() {
     const airlineCode = flightNumber.slice(0, 2);
     const airline = airlineDatabase[airlineCode];
 
+    // Validar que los códigos de aeropuerto existan en la base de datos
+    if (origin !== "---" && destination !== "---") {
+        if (!airportDatabase[origin]) {
+            mostrarNotificacion(`El código de origen '${origin}' no existe en la base de datos de aeropuertos`, "error");
+            return null;
+        }
+        if (!airportDatabase[destination]) {
+            mostrarNotificacion(`El código de destino '${destination}' no existe en la base de datos de aeropuertos`, "error");
+            return null;
+        }
+    }
+
+    // Calcular distancia si ambos aeropuertos existen
+    let distanceKm = 0;
+    if (origin !== "---" && destination !== "---" && airportDatabase[origin] && airportDatabase[destination]) {
+        const originData = airportDatabase[origin];
+        const destinationData = airportDatabase[destination];
+        distanceKm = Math.round(calcularDistancia(
+            originData.lat,
+            originData.lng,
+            destinationData.lat,
+            destinationData.lng
+        ));
+    }
+
     return {
         transportType: "flight",
         flight: flightNumber || "---",
@@ -3365,6 +3534,7 @@ function buildManualFlight() {
         boardingTime: "",
         date: formatManualDate(dateValue),
         flightDate: dateValue || formatearFechaISO(new Date()),
+        distanceKm: distanceKm,
         rawText: "MANUAL FLIGHT ENTRY",
         qrRaw: ""
     };
@@ -3405,6 +3575,11 @@ function handleManualTripSubmit(event) {
     event.preventDefault();
     const type = document.querySelector('input[name="manualTripType"]:checked')?.value || "flight";
     currentFlight = type === "train" ? buildManualTrain() : buildManualFlight();
+
+    // Si buildManualFlight retorna null, significa que hay un error de validación
+    if (!currentFlight) {
+        return;
+    }
 
     if (!currentFlight.flight || currentFlight.flight === "---") {
         mostrarNotificacion(type === "train" ? "Introduce el número de tren" : "Introduce el número de vuelo", "warning");
@@ -3471,13 +3646,16 @@ function loadHistory() {
         html = '<p>📭 No hay viajes guardados</p>';
     } else {
         history.slice(-12).reverse().forEach((f, index) => {
+            const realIndex = history.length - 1 - index;
             const fecha = f.date || 'Fecha desconocida';
             const ruta = f.route || 'Ruta no disponible';
             const asiento = f.seat || '---';
             const clase = f.flightClass || 'Turista';
             const isTrain = f.transportType === "train";
+            const selectedForDelete = tripsPendingDelete.has(realIndex);
             html += `
-                <div class="history-item" onclick="cargarVueloGuardado(${history.length - 1 - index})">
+                <div class="history-item ${selectedForDelete ? 'is-delete-selected' : ''}" onclick="cargarVueloGuardado(${realIndex})">
+                    ${deleteTripsMode ? `<button type="button" class="history-delete-x" onclick="event.stopPropagation(); toggleTripDeleteSelection(${realIndex})" aria-label="Marcar viaje para borrar">×</button>` : ''}
                     <div class="history-header">
                         <strong>${isTrain ? "🚆" : "✈️"} ${f.flight}</strong>
                         <span>${fecha}</span>
@@ -3493,8 +3671,87 @@ function loadHistory() {
     }
     
     document.getElementById("historyList").innerHTML = html;
+    updateDeleteTripsControls();
     renderHistorySummary(history);
     renderHistoryMap(history);
+}
+
+function requestDeleteTripsPassword(message) {
+    const value = window.prompt(`${message}\n\nContraseña: ${DELETE_TRIPS_PASSWORD}`);
+    return value === DELETE_TRIPS_PASSWORD;
+}
+
+function enableDeleteTripsMode() {
+    if (!requestDeleteTripsPassword("Introduce la contraseña para activar el modo borrar viajes.")) {
+        mostrarNotificacion("Contraseña incorrecta", "error");
+        return;
+    }
+
+    deleteTripsMode = true;
+    tripsPendingDelete.clear();
+    loadHistory();
+    mostrarNotificacion("Modo borrar activado. Pulsa la cruz de los viajes que quieras eliminar.", "info");
+}
+
+function cancelDeleteTripsMode() {
+    deleteTripsMode = false;
+    tripsPendingDelete.clear();
+    loadHistory();
+    mostrarNotificacion("Modo borrar cerrado", "info");
+}
+
+function toggleTripDeleteSelection(index) {
+    if (!deleteTripsMode) return;
+
+    if (tripsPendingDelete.has(index)) {
+        tripsPendingDelete.delete(index);
+    } else {
+        tripsPendingDelete.add(index);
+    }
+
+    loadHistory();
+}
+
+function confirmDeleteTrips() {
+    if (!deleteTripsMode) return;
+
+    if (!tripsPendingDelete.size) {
+        mostrarNotificacion("Selecciona al menos un viaje con la cruz", "warning");
+        return;
+    }
+
+    if (!requestDeleteTripsPassword(`Vas a borrar ${tripsPendingDelete.size} viaje(s). Introduce la contraseña otra vez para confirmar.`)) {
+        mostrarNotificacion("Contraseña incorrecta. No se borró nada.", "error");
+        return;
+    }
+
+    const history = JSON.parse(localStorage.getItem("flights")) || [];
+    const filtered = history.filter((_, index) => !tripsPendingDelete.has(index));
+    localStorage.setItem("flights", JSON.stringify(filtered));
+
+    deleteTripsMode = false;
+    tripsPendingDelete.clear();
+    loadHistory();
+    updateStats();
+    updateAirportsHistory();
+    updatePassportStamps();
+    updateDetailedWeatherWidgets();
+    mostrarNotificacion("Viajes borrados correctamente", "success");
+}
+
+function updateDeleteTripsControls() {
+    const enableBtn = document.getElementById("enableDeleteTripsBtn");
+    const confirmBtn = document.getElementById("confirmDeleteTripsBtn");
+    const cancelBtn = document.getElementById("cancelDeleteTripsBtn");
+
+    if (enableBtn) enableBtn.hidden = deleteTripsMode;
+    if (confirmBtn) {
+        confirmBtn.hidden = !deleteTripsMode;
+        confirmBtn.textContent = tripsPendingDelete.size
+            ? `Confirmar borrado (${tripsPendingDelete.size})`
+            : "Confirmar borrado";
+    }
+    if (cancelBtn) cancelBtn.hidden = !deleteTripsMode;
 }
 
 function renderHistorySummary(history) {
@@ -3585,6 +3842,11 @@ function renderHistoryMap(history) {
 }
 
 function cargarVueloGuardado(index) {
+    if (deleteTripsMode) {
+        toggleTripDeleteSelection(index);
+        return;
+    }
+
     const history = JSON.parse(localStorage.getItem("flights")) || [];
     if (history[index]) {
         currentFlight = history[index];
@@ -3754,6 +4016,21 @@ document.addEventListener('DOMContentLoaded', function() {
         manualTripForm.addEventListener("submit", handleManualTripSubmit);
     }
 
+    const enableDeleteTripsBtn = document.getElementById("enableDeleteTripsBtn");
+    if (enableDeleteTripsBtn) {
+        enableDeleteTripsBtn.addEventListener("click", enableDeleteTripsMode);
+    }
+
+    const confirmDeleteTripsBtn = document.getElementById("confirmDeleteTripsBtn");
+    if (confirmDeleteTripsBtn) {
+        confirmDeleteTripsBtn.addEventListener("click", confirmDeleteTrips);
+    }
+
+    const cancelDeleteTripsBtn = document.getElementById("cancelDeleteTripsBtn");
+    if (cancelDeleteTripsBtn) {
+        cancelDeleteTripsBtn.addEventListener("click", cancelDeleteTripsMode);
+    }
+
     const cameraBoardingBtn = document.getElementById("cameraBoardingBtn");
     if (cameraBoardingBtn) {
         cameraBoardingBtn.addEventListener("click", openBoardingCamera);
@@ -3869,6 +4146,22 @@ document.addEventListener('DOMContentLoaded', function() {
     const updateConversionBtn = document.getElementById('updateConversionBtn');
     if (updateConversionBtn) {
         updateConversionBtn.addEventListener('click', updateConversionSummary);
+    }
+
+    // Inicializar selector de países
+    const destinationCountrySelect = document.getElementById('destinationCountry');
+    if (destinationCountrySelect) {
+        // Poblar dropdown con países
+        const countries = Object.keys(countryDatabase).sort();
+        countries.forEach(country => {
+            const option = document.createElement('option');
+            option.value = country;
+            option.textContent = country;
+            destinationCountrySelect.appendChild(option);
+        });
+        
+        // Agregar event listener para actualizar conversor
+        destinationCountrySelect.addEventListener('change', updateConversionSummary);
     }
 
     togglePackingAddRow(false);

@@ -796,6 +796,43 @@ header p {
   transform: translateY(-1px);
 }
 
+.country-selector {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.country-selector label {
+  font-size: 0.9rem;
+  font-weight: 600;
+  color: var(--text);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.country-selector select {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 200, 255, 0.3);
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  font-size: 0.95rem;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.country-selector select:hover {
+  border-color: rgba(120, 200, 255, 0.6);
+  background: rgba(255, 255, 255, 0.09);
+}
+
+.country-selector select:focus {
+  outline: none;
+  border-color: var(--accent);
+  background: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 0 3px rgba(120, 200, 255, 0.1);
+}
+
 .packing-items-list {
   display: grid;
   gap: 10px;
@@ -964,6 +1001,65 @@ header p {
 .conversion-summary li {
   margin-bottom: 10px;
   color: var(--text);
+}
+
+.country-data {
+  display: grid;
+  gap: 16px;
+}
+
+.country-data > p {
+  margin: 0;
+  color: var(--accent);
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.country-data > ul {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.country-data > ul li {
+  color: var(--text);
+  margin-bottom: 8px;
+}
+
+.country-data strong {
+  color: var(--accent);
+  font-weight: 700;
+}
+
+.conversion-rates,
+.conversion-measurements {
+  padding: 12px 14px;
+  border-radius: 12px;
+  border: 1px solid rgba(120, 200, 255, 0.2);
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.conversion-rates strong,
+.conversion-measurements strong {
+  display: block;
+  margin-bottom: 10px;
+  color: var(--accent);
+  font-size: 0.95rem;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+
+.conversion-rates ul,
+.conversion-measurements ul {
+  margin: 0;
+  padding-left: 18px;
+  list-style: disc;
+}
+
+.conversion-rates li,
+.conversion-measurements li {
+  color: var(--text);
+  margin-bottom: 6px;
 }
 
 .conversion-note {
@@ -1274,12 +1370,39 @@ button:active {
 }
 
 .history-item {
+  position: relative;
   padding: 14px 16px;
   border-radius: 14px;
   background: rgba(12, 20, 32, 0.95);
   border: 1px solid rgba(255, 255, 255, 0.06);
   transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
   cursor: pointer;
+}
+
+.history-item.is-delete-selected {
+  border-color: rgba(255, 122, 120, 0.7);
+  background: rgba(255, 122, 120, 0.12) !important;
+}
+
+.history-delete-x {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  z-index: 2;
+  width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  border-radius: 12px;
+  border-color: rgba(255, 122, 120, 0.55);
+  background: rgba(255, 122, 120, 0.18);
+  color: #fff;
+  font-size: 1.3rem;
+  line-height: 1;
+}
+
+.history-item.is-delete-selected .history-delete-x {
+  background: rgba(255, 122, 120, 0.95);
 }
 
 .history-item:hover {
@@ -1380,6 +1503,37 @@ button:active {
 .history {
   margin-top: 24px;
   padding: 22px;
+}
+
+.history-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  margin-bottom: 18px;
+}
+
+.history-toolbar h2 {
+  margin: 0;
+}
+
+.history-delete-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 10px;
+}
+
+.history-delete-actions button {
+  min-height: 42px;
+  padding: 10px 14px;
+  font-size: 0.78rem;
+}
+
+#confirmDeleteTripsBtn {
+  border-color: rgba(255, 122, 120, 0.55);
+  background: linear-gradient(180deg, rgba(255, 122, 120, 0.95), rgba(172, 48, 52, 0.95));
+  color: white;
 }
 
 .stats-panel {
@@ -2506,10 +2660,19 @@ button:active {
   .offline-panel,
   .assistant-hero,
   .panel-head,
+  .history-toolbar,
   .history-header {
     flex-direction: column;
     align-items: stretch;
     text-align: left;
+  }
+
+  .history-delete-actions {
+    justify-content: stretch;
+  }
+
+  .history-delete-actions button {
+    width: 100%;
   }
 
   .offline-actions,
