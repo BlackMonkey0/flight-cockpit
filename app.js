@@ -467,12 +467,14 @@ const airportSearchCache = new Map();
 
 async function resolveAirportByCode(code) {
     if (!code || typeof code !== 'string') return null;
-    const normalized = code.trim().toUpperCase();
-    if (airportDatabase[normalized]) {
-        return airportDatabase[normalized];
+    const normalized = code.trim();
+    if (!normalized) return null;
+    const key = normalized.toUpperCase();
+    if (airportDatabase[key]) {
+        return airportDatabase[key];
     }
-    if (airportSearchCache.has(normalized)) {
-        return airportSearchCache.get(normalized);
+    if (airportSearchCache.has(key)) {
+        return airportSearchCache.get(key);
     }
 
     let resolved = await lookupAirportWithOpenMeteo(normalized);
@@ -480,13 +482,20 @@ async function resolveAirportByCode(code) {
         resolved = await lookupAirportWithNominatim(normalized);
     }
 
+    if (!resolved) {
+        resolved = await lookupLocationWithOpenMeteo(normalized);
+    }
+    if (!resolved) {
+        resolved = await lookupLocationWithNominatim(normalized);
+    }
+
     if (resolved) {
-        airportDatabase[normalized] = resolved;
-        airportSearchCache.set(normalized, resolved);
+        airportDatabase[key] = resolved;
+        airportSearchCache.set(key, resolved);
         return resolved;
     }
 
-    airportSearchCache.set(normalized, null);
+    airportSearchCache.set(key, null);
     return null;
 }
 
@@ -543,12 +552,61 @@ async function lookupAirportWithNominatim(code) {
     }
 }
 
+async function lookupLocationWithOpenMeteo(query) {
+    try {
+        const encoded = encodeURIComponent(query);
+        const url = `https://geocoding-api.open-meteo.com/v1/search?name=${encoded}&count=5&language=es`;
+        const response = await fetch(url);
+        if (!response.ok) return null;
+        const data = await response.json();
+
+        if (!Array.isArray(data.results) || !data.results.length) return null;
+        const place = data.results[0];
+        return {
+            lat: Number(place.latitude),
+            lng: Number(place.longitude),
+            nombre: place.name || query,
+            ciudad: place.admin1 || place.country || '',
+            pais: place.country || 'Desconocido'
+        };
+    } catch (error) {
+        console.warn('OpenMeteo location lookup failed:', error);
+        return null;
+    }
+}
+
+async function lookupLocationWithNominatim(query) {
+    try {
+        const encoded = encodeURIComponent(query);
+        const url = `https://nominatim.openstreetmap.org/search?q=${encoded}&format=json&limit=3&addressdetails=1`;
+        const response = await fetch(url, {
+            headers: { 'Accept-Language': 'es' }
+        });
+        if (!response.ok) return null;
+        const results = await response.json();
+        if (!Array.isArray(results) || !results.length) return null;
+
+        const match = results[0];
+        const address = match.address || {};
+        return {
+            lat: Number(match.lat),
+            lng: Number(match.lon),
+            nombre: match.display_name.split(',')[0] || query,
+            ciudad: address.city || address.town || address.village || address.state || '',
+            pais: address.country || 'Desconocido'
+        };
+    } catch (error) {
+        console.warn('Nominatim location lookup failed:', error);
+        return null;
+    }
+}
+
 async function ensureAirportData(flight) {
     if (!flight || !flight.origin || !flight.destination) return false;
-    const originCode = flight.origin.trim().toUpperCase();
-    const destinationCode = flight.destination.trim().toUpperCase();
-    let originResolved = airportDatabase[originCode];
-    let destinationResolved = airportDatabase[destinationCode];
+    const originCode = flight.origin.trim();
+    const destinationCode = flight.destination.trim();
+    let originResolved = airportDatabase[originCode.toUpperCase()];
+    let destinationResolved = airportDatabase[destinationCode.toUpperCase()];
 
     if (!originResolved) {
         originResolved = await resolveAirportByCode(originCode);
