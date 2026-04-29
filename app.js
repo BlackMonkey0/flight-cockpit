@@ -3702,6 +3702,7 @@ function buildManualTrain() {
     const origin = getInputValue("manualTrainOrigin") || "---";
     const destination = getInputValue("manualTrainDestination") || "---";
     const departureTime = getInputValue("manualTrainDeparture");
+    const dateValue = getInputValue("manualTrainDate");
 
     return {
         transportType: "train",
@@ -3720,8 +3721,8 @@ function buildManualTrain() {
         flightClass: "Standard",
         trainClass: "Standard",
         durationText: "---",
-        date: new Date().toLocaleDateString(),
-        flightDate: formatearFechaISO(new Date()),
+        date: dateValue ? formatManualDate(dateValue) : new Date().toLocaleDateString(),
+        flightDate: dateValue ? dateValue : formatearFechaISO(new Date()),
         rawText: "MANUAL TRAIN ENTRY",
         qrRaw: ""
     };
@@ -3796,6 +3797,13 @@ function getFlightUniqueKey(flight) {
 
 async function loadHistory() {
     let history = JSON.parse(localStorage.getItem("flights")) || [];
+    
+    history.sort((a, b) => {
+        const aDate = (a.flightDate || resolverFechaVueloISO(a.date || ""));
+        const bDate = (b.flightDate || resolverFechaVueloISO(b.date || ""));
+        return bDate.localeCompare(aDate) || (b.flight || "").localeCompare(a.flight || "");
+    });
+
     let html = "";
     
     if (history.length === 0) {
