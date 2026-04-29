@@ -78,6 +78,14 @@ body::before {
   font-weight: 800;
   box-shadow: 0 24px 48px rgba(9, 25, 48, 0.45);
   border: 1px solid rgba(255, 255, 255, 0.08);
+  overflow: hidden;
+}
+
+.brand-logo-image {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
 }
 
 .brand-copy {
