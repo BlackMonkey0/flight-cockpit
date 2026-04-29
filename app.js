@@ -42,6 +42,11 @@ const checklistIds = [
     "taskDocsReady"
 ];
 
+let travelerPrideMap = null;
+let visitedCountries = new Set();
+let visitedCities = new Set();
+let travelRoutes = [];
+
 const DEFAULT_PACKING_ITEMS = [
   { id: "packingDocsPassport", label: "Documentos y pasaporte", checked: false },
   { id: "packingChargers", label: "Cargadores y adaptadores", checked: false },
@@ -631,18 +636,385 @@ async function ensureAirportData(flight) {
 // BASE DE DATOS DE AEROLÍNEAS
 // ==========================================
 const airlineDatabase = {
-    'FR': { nombre: 'Ryanair', avion: 'Boeing 737-800', codigo: 'RYR' },
-    'IB': { nombre: 'Iberia', avion: 'Airbus A320', codigo: 'IBE' },
-    'UX': { nombre: 'Air Europa', avion: 'Boeing 737-800', codigo: 'AEA' },
-    'AZ': { nombre: 'ITA Airways', avion: 'Airbus A320', codigo: 'ITY' },
-    'VY': { nombre: 'Vueling', avion: 'Airbus A320', codigo: 'VLG' },
-    'U2': { nombre: 'EasyJet', avion: 'Airbus A320', codigo: 'EZY' },
-    'AA': { nombre: 'American Airlines', avion: 'Boeing 777', codigo: 'AAL' },
-    'DL': { nombre: 'Delta Airlines', avion: 'Airbus A330', codigo: 'DAL' },
-    'BA': { nombre: 'British Airways', avion: 'Airbus A380', codigo: 'BAW' },
-    'AF': { nombre: 'Air France', avion: 'Airbus A350', codigo: 'AFR' },
-    'LH': { nombre: 'Lufthansa', avion: 'Boeing 747-8', codigo: 'DLH' }
+    'FR': { nombre: 'Ryanair', avion: 'Boeing 737-800', codigo: 'RYR', colores: { primary: '#0052A5', secondary: '#F6C700', accent: '#E30613' } },
+    'IB': { nombre: 'Iberia', avion: 'Airbus A320', codigo: 'IBE', colores: { primary: '#D7192D', secondary: '#003366', accent: '#FFD700' } },
+    'UX': { nombre: 'Air Europa', avion: 'Boeing 737-800', codigo: 'AEA', colores: { primary: '#FF6600', secondary: '#003366', accent: '#FFD700' } },
+    'AZ': { nombre: 'ITA Airways', avion: 'Airbus A320', codigo: 'ITY', colores: { primary: '#003366', secondary: '#009639', accent: '#FFD700' } },
+    'VY': { nombre: 'Vueling', avion: 'Airbus A320', codigo: 'VLG', colores: { primary: '#CCCCCC', secondary: '#FFD700', accent: '#FF6600' } },
+    'U2': { nombre: 'EasyJet', avion: 'Airbus A320', codigo: 'EZY', colores: { primary: '#FF6600', secondary: '#009639', accent: '#003366' } },
+    'AA': { nombre: 'American Airlines', avion: 'Boeing 777', codigo: 'AAL', colores: { primary: '#003366', secondary: '#FF6600', accent: '#FFD700' } },
+    'DL': { nombre: 'Delta Airlines', avion: 'Airbus A330', codigo: 'DAL', colores: { primary: '#003366', secondary: '#FF6600', accent: '#FFD700' } },
+    'BA': { nombre: 'British Airways', avion: 'Airbus A380', codigo: 'BAW', colores: { primary: '#2E5C99', secondary: '#FFD700', accent: '#FF6600' } },
+    'AF': { nombre: 'Air France', avion: 'Airbus A350', codigo: 'AFR', colores: { primary: '#003366', secondary: '#FF6600', accent: '#FFD700' } },
+    'LH': { nombre: 'Lufthansa', avion: 'Boeing 747-8', codigo: 'DLH', colores: { primary: '#003366', secondary: '#FFD700', accent: '#FF6600' } },
+    'EK': { nombre: 'Emirates', avion: 'Airbus A380', codigo: 'UAE', colores: { primary: '#D7192D', secondary: '#003366', accent: '#FFD700' } },
+    'QR': { nombre: 'Qatar Airways', avion: 'Boeing 777', codigo: 'QTR', colores: { primary: '#5C1F7E', secondary: '#FFD700', accent: '#D7192D' } },
+    'TK': { nombre: 'Turkish Airlines', avion: 'Boeing 777', codigo: 'THY', colores: { primary: '#C70A0A', secondary: '#FFD700', accent: '#003366' } },
+    'KL': { nombre: 'KLM', avion: 'Boeing 777', codigo: 'KLM', colores: { primary: '#003366', secondary: '#FF6600', accent: '#FFD700' } },
+    'LX': { nombre: 'Swiss International Air Lines', avion: 'Airbus A330', codigo: 'SWR', colores: { primary: '#D7192D', secondary: '#FFD700', accent: '#003366' } },
+    'OS': { nombre: 'Austrian Airlines', avion: 'Airbus A320', codigo: 'AUA', colores: { primary: '#D7192D', secondary: '#003366', accent: '#FFD700' } },
+    'SN': { nombre: 'Brussels Airlines', avion: 'Airbus A320', codigo: 'BEL', colores: { primary: '#003366', secondary: '#FF6600', accent: '#FFD700' } },
+    'TP': { nombre: 'TAP Air Portugal', avion: 'Airbus A330', codigo: 'TAP', colores: { primary: '#003366', secondary: '#009639', accent: '#FFD700' } },
+    'VY': { nombre: 'Vueling', avion: 'Airbus A320', codigo: 'VLG', colores: { primary: '#CCCCCC', secondary: '#FFD700', accent: '#FF6600' } }
 };
+
+// ==========================================
+// FUNCIONES DE MEMORIA INTELIGENTE
+// ==========================================
+function analyzeFlightPatterns() {
+    const history = JSON.parse(localStorage.getItem('flights')) || [];
+    if (!history.length) return [];
+
+    const insights = [];
+    const seatPreferences = {};
+    const destinationPreferences = {};
+    const timePreferences = {};
+    const airlinePreferences = {};
+
+    history.forEach(flight => {
+        // Análisis de asientos
+        if (flight.seat) {
+            const seatType = getSeatType(flight.seat);
+            seatPreferences[seatType] = (seatPreferences[seatType] || 0) + 1;
+        }
+
+        // Análisis de destinos
+        if (flight.destination) {
+            const country = airportDatabase[flight.destination]?.pais;
+            if (country) {
+                destinationPreferences[country] = (destinationPreferences[country] || 0) + 1;
+            }
+        }
+
+        // Análisis de horarios
+        if (flight.departureTime) {
+            const hour = parseInt(flight.departureTime.split(':')[0]);
+            const timeSlot = getTimeSlot(hour);
+            timePreferences[timeSlot] = (timePreferences[timeSlot] || 0) + 1;
+        }
+
+        // Análisis de aerolíneas
+        if (flight.airlineName) {
+            airlinePreferences[flight.airlineName] = (airlinePreferences[flight.airlineName] || 0) + 1;
+        }
+    });
+
+    // Generar insights
+    const totalFlights = history.length;
+
+    // Preferencia de asiento
+    const preferredSeat = Object.entries(seatPreferences).sort((a, b) => b[1] - a[1])[0];
+    if (preferredSeat) {
+        const percentage = Math.round((preferredSeat[1] / totalFlights) * 100);
+        insights.push({
+            icon: '💺',
+            text: `Prefieres asientos ${preferredSeat[0]} (${percentage}% de tus vuelos)`,
+            type: 'seat'
+        });
+    }
+
+    // Destino favorito
+    const preferredDestination = Object.entries(destinationPreferences).sort((a, b) => b[1] - a[1])[0];
+    if (preferredDestination && preferredDestination[1] > 1) {
+        insights.push({
+            icon: '🌍',
+            text: `Viajas mucho a ${preferredDestination[0]} (${preferredDestination[1]} viajes)`,
+            type: 'destination'
+        });
+    }
+
+    // Preferencia horaria
+    const preferredTime = Object.entries(timePreferences).sort((a, b) => b[1] - a[1])[0];
+    if (preferredTime) {
+        const percentage = Math.round((preferredTime[1] / totalFlights) * 100);
+        insights.push({
+            icon: '🕐',
+            text: `Prefieres vuelos de ${preferredTime[0]} (${percentage}% de tus vuelos)`,
+            type: 'time'
+        });
+    }
+
+    // Aerolínea favorita
+    const preferredAirline = Object.entries(airlinePreferences).sort((a, b) => b[1] - a[1])[0];
+    if (preferredAirline && preferredAirline[1] > 1) {
+        insights.push({
+            icon: '✈️',
+            text: `Tu aerolínea favorita es ${preferredAirline[0]} (${preferredAirline[1]} vuelos)`,
+            type: 'airline'
+        });
+    }
+
+    // Análisis de frecuencia de viajes
+    const recentFlights = history.filter(f => {
+        const flightDate = new Date(f.flightDate || f.date);
+        const threeMonthsAgo = new Date();
+        threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+        return flightDate > threeMonthsAgo;
+    });
+
+    if (recentFlights.length > 2) {
+        insights.push({
+            icon: '📈',
+            text: `Eres un viajero frecuente (${recentFlights.length} vuelos en los últimos 3 meses)`,
+            type: 'frequency'
+        });
+    }
+
+    return insights.slice(0, 4); // Máximo 4 insights
+}
+
+function getSeatType(seat) {
+    if (!seat) return 'desconocido';
+    const seatNum = parseInt(seat.replace(/\D/g, ''));
+    if (seat.includes('A') || seat.includes('F')) return 'ventana';
+    if (seat.includes('C') || seat.includes('D')) return 'pasillo';
+    if (seatNum <= 10) return 'delantero';
+    return 'central';
+}
+
+function getTimeSlot(hour) {
+    if (hour >= 5 && hour < 12) return 'mañana';
+    if (hour >= 12 && hour < 18) return 'tarde';
+    return 'noche';
+}
+
+function renderIntelligentMemory() {
+    const container = document.getElementById('intelligentMemory');
+    if (!container) return;
+
+    const insights = analyzeFlightPatterns();
+
+    if (!insights.length) {
+        container.innerHTML = '<p class="memory-empty">Guarda algunos vuelos para que pueda aprender tus preferencias de viaje.</p>';
+        return;
+    }
+
+    container.innerHTML = insights.map(insight => `
+        <div class="memory-insight">
+            <span class="memory-icon">${insight.icon}</span>
+            <span class="memory-text">${insight.text}</span>
+        </div>
+    `).join('');
+}
+
+// ==========================================
+// FUNCIONES DEL MAPA ORGULLO VIAJERO
+// ==========================================
+function initializeTravelerPrideMap() {
+    if (travelerPrideMap) return;
+
+    const mapContainer = document.getElementById('travelerPrideMap');
+    if (!mapContainer) return;
+
+    travelerPrideMap = L.map('travelerPrideMap').setView([20, 0], 2);
+
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '© OpenStreetMap contributors',
+        maxZoom: 18,
+    }).addTo(travelerPrideMap);
+
+    updateTravelerPrideData();
+}
+
+function updateTravelerPrideData() {
+    const history = JSON.parse(localStorage.getItem('flights')) || [];
+    
+    visitedCountries.clear();
+    visitedCities.clear();
+    travelRoutes = [];
+
+    // Procesar vuelos para extraer países y ciudades visitadas
+    history.forEach(flight => {
+        const origin = airportDatabase[flight.origin];
+        const destination = airportDatabase[flight.destination];
+
+        if (origin) {
+            visitedCountries.add(origin.pais);
+            visitedCities.add(`${origin.ciudad}, ${origin.pais}`);
+        }
+
+        if (destination) {
+            visitedCountries.add(destination.pais);
+            visitedCities.add(`${destination.ciudad}, ${destination.pais}`);
+        }
+
+        // Añadir ruta
+        if (origin && destination) {
+            travelRoutes.push({
+                origin: { lat: origin.lat, lng: origin.lng, city: origin.ciudad },
+                destination: { lat: destination.lat, lng: destination.lng, city: destination.ciudad },
+                flight: flight.flight,
+                date: flight.flightDate || flight.date
+            });
+        }
+    });
+
+    renderTravelerPrideMap();
+    updateTravelerPrideStats();
+    renderVisitedCountriesList();
+}
+
+function renderTravelerPrideMap() {
+    if (!travelerPrideMap) return;
+
+    // Limpiar marcadores y líneas anteriores
+    travelerPrideMap.eachLayer(layer => {
+        if (layer instanceof L.Marker || layer instanceof L.Polyline || layer instanceof L.CircleMarker) {
+            travelerPrideMap.removeLayer(layer);
+        }
+    });
+
+    const bounds = [];
+
+    // Dibujar rutas
+    travelRoutes.forEach(route => {
+        const latlngs = [
+            [route.origin.lat, route.origin.lng],
+            [route.destination.lat, route.destination.lng]
+        ];
+
+        L.polyline(latlngs, {
+            color: '#ffd35b',
+            weight: 2,
+            opacity: 0.7
+        }).addTo(travelerPrideMap);
+
+        bounds.push(route.origin.lat, route.origin.lng);
+        bounds.push(route.destination.lat, route.destination.lng);
+    });
+
+    // Marcar ciudades visitadas
+    const cityMarkers = new Set();
+    travelRoutes.forEach(route => {
+        [route.origin, route.destination].forEach(point => {
+            const key = `${point.lat},${point.lng}`;
+            if (!cityMarkers.has(key)) {
+                cityMarkers.add(key);
+                
+                L.circleMarker([point.lat, point.lng], {
+                    color: '#7ef1d1',
+                    fillColor: '#7ef1d1',
+                    fillOpacity: 0.8,
+                    radius: 6
+                }).addTo(travelerPrideMap).bindPopup(`${point.city}`);
+            }
+        });
+    });
+
+    // Ajustar vista si hay rutas
+    if (bounds.length > 0) {
+        travelerPrideMap.fitBounds(bounds, { padding: [20, 20] });
+    }
+}
+
+function updateTravelerPrideStats() {
+    const totalCountries = 195; // Número aproximado de países en el mundo
+    const percentage = visitedCountries.size > 0 ? Math.round((visitedCountries.size / totalCountries) * 100) : 0;
+
+    setText('visitedCountriesCount', formatNumber(visitedCountries.size));
+    setText('worldPercentage', `${percentage}%`);
+    setText('visitedCitiesCount', formatNumber(visitedCities.size));
+}
+
+function renderVisitedCountriesList() {
+    const container = document.getElementById('visitedCountriesList');
+    if (!container) return;
+
+    if (visitedCountries.size === 0) {
+        container.innerHTML = '<p class="traveler-empty">Aún no has visitado países registrados en la app.</p>';
+        return;
+    }
+
+    // Contar visitas por país
+    const countryVisits = {};
+    const history = JSON.parse(localStorage.getItem('flights')) || [];
+    
+    history.forEach(flight => {
+        const originCountry = airportDatabase[flight.origin]?.pais;
+        const destCountry = airportDatabase[flight.destination]?.pais;
+        
+        if (originCountry) countryVisits[originCountry] = (countryVisits[originCountry] || 0) + 1;
+        if (destCountry) countryVisits[destCountry] = (countryVisits[destCountry] || 0) + 1;
+    });
+
+    const sortedCountries = Array.from(visitedCountries).sort((a, b) => 
+        (countryVisits[b] || 0) - (countryVisits[a] || 0)
+    );
+
+    container.innerHTML = sortedCountries.map(country => {
+        const visits = countryVisits[country] || 0;
+        const flag = getCountryFlag(country);
+        
+        return `
+            <div class="visited-country-item">
+                <span class="visited-country-flag">${flag}</span>
+                <span class="visited-country-name">${country}</span>
+                <span class="visited-country-visits">${visits} viaje${visits !== 1 ? 's' : ''}</span>
+            </div>
+        `;
+    }).join('');
+}
+
+function getCountryFlag(country) {
+    const flags = {
+        'España': '🇪🇸',
+        'Italia': '🇮🇹',
+        'Francia': '🇫🇷',
+        'Reino Unido': '🇬🇧',
+        'Alemania': '🇩🇪',
+        'Portugal': '🇵🇹',
+        'Países Bajos': '🇳🇱',
+        'Bélgica': '🇧🇪',
+        'Suiza': '🇨🇭',
+        'Austria': '🇦🇹',
+        'Grecia': '🇬🇷',
+        'Irlanda': '🇮🇪',
+        'Dinamarca': '🇩🇰',
+        'Suecia': '🇸🇪',
+        'Noruega': '🇳🇴',
+        'Finlandia': '🇫🇮',
+        'Polonia': '🇵🇱',
+        'Chequia': '🇨🇿',
+        'Hungría': '🇭🇺',
+        'Rumanía': '🇷🇴',
+        'Turquía': '🇹🇷',
+        'EEUU': '🇺🇸',
+        'Canadá': '🇨🇦',
+        'México': '🇲🇽',
+        'Colombia': '🇨🇴',
+        'Perú': '🇵🇪',
+        'Ecuador': '🇪🇨',
+        'Venezuela': '🇻🇪',
+        'Chile': '🇨🇱',
+        'Argentina': '🇦🇷',
+        'Uruguay': '🇺🇾',
+        'Paraguay': '🇵🇾',
+        'Bolivia': '🇧🇴',
+        'Brasil': '🇧🇷'
+    };
+    
+    return flags[country] || '🌍';
+}
+
+function initializeCountrySelector() {
+    const destinationCountrySelect = document.getElementById('destinationCountry');
+    if (destinationCountrySelect && typeof countryDatabase !== 'undefined') {
+        // Limpiar opciones existentes
+        destinationCountrySelect.innerHTML = '<option value="">-- Selecciona un país --</option>';
+        
+        // Poblar dropdown con países
+        const countries = Object.keys(countryDatabase).sort();
+        countries.forEach(country => {
+            const option = document.createElement('option');
+            option.value = country;
+            option.textContent = country;
+            destinationCountrySelect.appendChild(option);
+        });
+        
+        // Agregar event listener para actualizar conversor
+        destinationCountrySelect.addEventListener('change', updateConversionSummary);
+    }
+}
 
 // ==========================================
 // BASE DE DATOS DE PAÍSES
@@ -1445,6 +1817,9 @@ async function enriquecerDatosVuelo() {
         currentFlight.aircraftName = aerolinea.avion;
         setText("airline", `🏢 ${aerolinea.nombre}`);
         setText("aircraft", `✈️ ${aerolinea.avion}`);
+        
+        // Aplicar tema de aerolínea
+        applyAirlineTheme(codigoAerolinea);
     } else {
         currentFlight.airlineName = "Desconocida";
         currentFlight.aircraftName = "No identificado";
@@ -1496,8 +1871,6 @@ function calcularDatosRuta() {
         setText("distance", "📏 Calculando...");
         setText("duration", "⏱️ Calculando...");
     }
-
-    updateConversionSummary();
 }
 
 // ==========================================
@@ -3760,7 +4133,6 @@ async function saveFlight() {
 
     ensureFlightPackingList();
     await ensureAirportData(currentFlight);
-    updateConversionSummary();
 
     let history = JSON.parse(localStorage.getItem("flights")) || [];
 
@@ -3779,6 +4151,8 @@ async function saveFlight() {
     updateAirportsHistory();
     updatePassportStamps();
     updateDetailedWeatherWidgets();
+    updateTravelerPrideData();
+    renderIntelligentMemory();
 
     mostrarNotificacion(`✅ ${currentFlight.transportType === "train" ? "Tren" : "Vuelo"} guardado en el Logbook`, 'success');
 }
@@ -4141,6 +4515,9 @@ document.addEventListener('DOMContentLoaded', async function() {
     // Inicializar mapa
     inicializarMapa();
     
+    // Inicializar mapa orgullo viajero
+    initializeTravelerPrideMap();
+    
     // Cargar historial
     await loadHistory();
     updateStats();
@@ -4149,6 +4526,7 @@ document.addEventListener('DOMContentLoaded', async function() {
     updatePassportStamps();
     updateDetailedWeatherWidgets();
     renderDefaultAssistantState();
+    renderIntelligentMemory();
     
     // Botón de guardar
     const saveBtn = document.getElementById('saveFlightBtn');
@@ -4310,31 +4688,9 @@ document.addEventListener('DOMContentLoaded', async function() {
         });
     }
 
-    const updateConversionBtn = document.getElementById('updateConversionBtn');
-    if (updateConversionBtn) {
-        updateConversionBtn.addEventListener('click', updateConversionSummary);
-    }
-
-    // Inicializar selector de países
-    const destinationCountrySelect = document.getElementById('destinationCountry');
-    if (destinationCountrySelect) {
-        // Poblar dropdown con países
-        const countries = Object.keys(countryDatabase).sort();
-        countries.forEach(country => {
-            const option = document.createElement('option');
-            option.value = country;
-            option.textContent = country;
-            destinationCountrySelect.appendChild(option);
-        });
-        
-        // Agregar event listener para actualizar conversor
-        destinationCountrySelect.addEventListener('change', updateConversionSummary);
-    }
-
     togglePackingAddRow(false);
     ensureFlightPackingList();
     renderPackingChecklist();
-    updateConversionSummary();
 
     document.querySelectorAll(".game-tab").forEach(tab => {
         tab.addEventListener("click", () => switchGameTab(tab.dataset.game));

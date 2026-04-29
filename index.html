@@ -130,6 +130,13 @@
             </div>
           </div>
         </div>
+
+        <div class="assistant-card memory-card">
+          <h3>🧠 Memoria Inteligente</h3>
+          <div id="intelligentMemory" class="intelligent-memory">
+            <div class="memory-empty">Guarda algunos vuelos para que pueda aprender tus preferencias de viaje.</div>
+          </div>
+        </div>
       </div>
 
       <div class="checklist">
@@ -201,18 +208,16 @@
             </div>
           </div>
 
-          <div class="converter-widget">
+          <div class="packing-widget">
             <div class="panel-head">
-              <h3>Conversor de Moneda y Medidas</h3>
-              <button type="button" id="updateConversionBtn" class="small-btn">💰 Actualizar tasas</button>
+              <h3>Packing List Inteligente</h3>
+              <button type="button" id="togglePackingInputBtn" class="small-btn">+ Añadir más cosas</button>
             </div>
-            <div class="country-selector">
-              <label for="destinationCountry">🌍 País de destino:</label>
-              <select id="destinationCountry" aria-label="Seleccionar país de destino">
-                <option value="">-- Selecciona un país --</option>
-              </select>
+            <div id="packingItemsList" class="packing-items-list"></div>
+            <div class="packing-add-row" id="packingAddRow">
+              <input type="text" id="newPackingItemInput" placeholder="Escribe un ítem nuevo">
+              <button type="button" id="addPackingItemButton">Añadir</button>
             </div>
-            <div id="conversionSummary" class="conversion-summary"></div>
           </div>
         </div>
       </div>
@@ -502,10 +507,37 @@
       </div>
     </section>
 
-    <section class="airports-panel" aria-label="Aeropuertos anteriores">
-      <h2>AEROPUERTOS ANTERIORES</h2>
-      <p class="airports-intro">Aeropuertos detectados en tus tarjetas de embarque guardadas.</p>
-      <div id="airportsHistoryList" class="airports-history"></div>
+    <section class="traveler-pride-panel" aria-label="Mapa orgullo viajero">
+      <h2>🌍 MAPA "ORGULLO VIAJERO"</h2>
+      <p class="traveler-pride-intro">Tu mapa personal del mundo recorrido. Países visitados, rutas conectadas y estadísticas de tu aventura global.</p>
+
+      <div class="traveler-pride-content">
+        <div class="traveler-map-card">
+          <h3>Mapa Mundial de Viajes</h3>
+          <div id="travelerPrideMap"></div>
+          <div class="traveler-stats">
+            <div class="traveler-stat">
+              <strong id="visitedCountriesCount">0</strong>
+              <small>Países visitados</small>
+            </div>
+            <div class="traveler-stat">
+              <strong id="worldPercentage">0%</strong>
+              <small>Del mundo recorrido</small>
+            </div>
+            <div class="traveler-stat">
+              <strong id="visitedCitiesCount">0</strong>
+              <small>Ciudades visitadas</small>
+            </div>
+          </div>
+        </div>
+
+        <div class="traveler-details-card">
+          <h3>Detalles del Viaje</h3>
+          <div id="visitedCountriesList" class="visited-countries-list">
+            <p class="traveler-empty">Aún no has visitado países registrados en la app.</p>
+          </div>
+        </div>
+      </div>
     </section>
 
     <section class="games-panel" aria-label="Mini juegos de vuelo">

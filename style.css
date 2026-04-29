@@ -1,6 +1,6 @@
 :root {
-  --bg-top: #07111f;
-  --bg-bottom: #02060d;
+  --bg-top: var(--airline-primary, #07111f);
+  --bg-bottom: var(--airline-secondary, #02060d);
   --shell: rgba(6, 12, 18, 0.94);
   --panel: rgba(7, 14, 22, 0.92);
   --panel-strong: rgba(12, 20, 30, 0.98);
@@ -9,7 +9,7 @@
   --border-strong: rgba(255, 189, 70, 0.32);
   --text: #eef8ff;
   --muted: #92a9bd;
-  --accent: #ffd35b;
+  --accent: var(--airline-accent, #ffd35b);
   --accent-strong: #ffc545;
   --accent-warm: #ffb24a;
   --success: #7ef1d1;
@@ -646,6 +646,43 @@ header p {
 .assistant-empty {
   color: var(--muted);
   line-height: 1.5;
+}
+
+.memory-card {
+  margin-top: 18px;
+  grid-column: 1 / -1;
+}
+
+.intelligent-memory {
+  display: grid;
+  gap: 12px;
+}
+
+.memory-insight {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 12px;
+  align-items: center;
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.memory-icon {
+  font-size: 1.2em;
+}
+
+.memory-text {
+  color: var(--text);
+  font-size: 0.9rem;
+}
+
+.memory-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 20px;
+  font-style: italic;
 }
 
 .assistant-alert-icon {
@@ -1568,6 +1605,106 @@ button:active {
 .airports-panel {
   margin-top: 24px;
   padding: 22px;
+}
+
+.traveler-pride-panel {
+  margin-top: 28px;
+  padding: 22px;
+}
+
+.traveler-pride-content {
+  display: grid;
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 0.5fr);
+  gap: 18px;
+  margin-top: 18px;
+}
+
+.traveler-map-card,
+.traveler-details-card {
+  padding: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(120, 200, 255, 0.14);
+  background: rgba(255, 255, 255, 0.035);
+}
+
+.traveler-map-card h3,
+.traveler-details-card h3 {
+  margin: 0 0 14px;
+  color: var(--text);
+  font-size: 0.98rem;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+#travelerPrideMap {
+  height: 400px;
+  border-radius: 12px;
+  margin-bottom: 18px;
+}
+
+.traveler-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 16px;
+}
+
+.traveler-stat {
+  text-align: center;
+  padding: 12px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.traveler-stat strong {
+  display: block;
+  font-size: 1.5rem;
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.traveler-stat small {
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.visited-countries-list {
+  display: grid;
+  gap: 8px;
+}
+
+.visited-country-item {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.visited-country-flag {
+  font-size: 1.2em;
+}
+
+.visited-country-name {
+  color: var(--text);
+  font-weight: 500;
+}
+
+.visited-country-visits {
+  color: var(--accent);
+  font-size: 0.9rem;
+  background: rgba(255, 255, 255, 0.05);
+  padding: 4px 8px;
+  border-radius: 8px;
+}
+
+.traveler-empty {
+  color: var(--muted);
+  text-align: center;
+  padding: 40px 20px;
+  font-style: italic;
 }
 
 .games-panel {
