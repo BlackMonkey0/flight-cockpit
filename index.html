@@ -226,6 +226,7 @@
       </div>
 
       <div class="controls">
+        <button type="button" id="openManualTripBtn">✍️ Añadir viaje manualmente</button>
         <button type="button" id="saveFlightBtn">Guardar vuelo</button>
       </div>
 
@@ -583,6 +584,59 @@
       </div>
     </section>
   </main>
+
+  <div id="manualTripModal" class="manual-trip-modal" aria-hidden="true">
+    <div class="manual-trip-dialog" role="dialog" aria-modal="true" aria-labelledby="manualTripTitle">
+      <div class="manual-trip-head">
+        <div>
+          <span class="manual-trip-kicker">Entrada manual</span>
+          <h2 id="manualTripTitle">Añadir viaje manualmente</h2>
+        </div>
+        <button type="button" id="closeManualTripBtn" class="manual-trip-close" aria-label="Cerrar formulario">×</button>
+      </div>
+
+      <form id="manualTripForm" class="manual-trip-form">
+        <div class="manual-trip-type" role="group" aria-label="Tipo de viaje">
+          <label>
+            <input type="radio" name="manualTripType" value="flight" checked>
+            <span>Vuelo</span>
+          </label>
+          <label>
+            <input type="radio" name="manualTripType" value="train">
+            <span>Tren</span>
+          </label>
+        </div>
+
+        <div class="manual-fields manual-flight-fields">
+          <label><span>Aerolínea</span><input type="text" id="manualAirline" placeholder="Iberia"></label>
+          <label><span>Nº vuelo</span><input type="text" id="manualFlightNumber" placeholder="IB3166" required></label>
+          <label><span>Origen</span><input type="text" id="manualFlightOrigin" placeholder="MAD" maxlength="3" required></label>
+          <label><span>Destino</span><input type="text" id="manualFlightDestination" placeholder="MXP" maxlength="3" required></label>
+          <label><span>Fecha</span><input type="date" id="manualFlightDate" required></label>
+          <label><span>Asiento</span><input type="text" id="manualFlightSeat" placeholder="12A"></label>
+          <label><span>Terminal</span><input type="text" id="manualFlightTerminal" placeholder="T4"></label>
+          <label><span>Gate</span><input type="text" id="manualFlightGate" placeholder="B12"></label>
+          <label><span>Equipaje</span><input type="text" id="manualFlightBaggage" placeholder="1 PC incluido"></label>
+          <label class="manual-field-wide"><span>Notas</span><textarea id="manualFlightNotes" rows="3" placeholder="Notas del viaje"></textarea></label>
+        </div>
+
+        <div class="manual-fields manual-train-fields" hidden>
+          <label><span>Operadora</span><input type="text" id="manualTrainOperator" placeholder="Renfe"></label>
+          <label><span>Nº tren</span><input type="text" id="manualTrainNumber" placeholder="03162"></label>
+          <label><span>Estación origen</span><input type="text" id="manualTrainOrigin" placeholder="Madrid"></label>
+          <label><span>Estación destino</span><input type="text" id="manualTrainDestination" placeholder="Barcelona"></label>
+          <label><span>Hora salida</span><input type="time" id="manualTrainDeparture"></label>
+          <label><span>Vagón</span><input type="text" id="manualTrainCoach" placeholder="5"></label>
+          <label><span>Asiento</span><input type="text" id="manualTrainSeat" placeholder="12A"></label>
+        </div>
+
+        <div class="manual-trip-actions">
+          <button type="button" id="cancelManualTripBtn">Cancelar</button>
+          <button type="submit">Guardar viaje</button>
+        </div>
+      </form>
+    </div>
+  </div>
 
   <script src="https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js"></script>
   <script

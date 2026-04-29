@@ -3297,6 +3297,127 @@ function cargarVueloDemo() {
     mostrarNotificacion('🎮 Vuelo de demostración cargado', 'info');
 }
 
+function openManualTripModal() {
+    const modal = document.getElementById("manualTripModal");
+    if (!modal) return;
+    modal.classList.add("is-open");
+    modal.setAttribute("aria-hidden", "false");
+    document.getElementById("manualFlightNumber")?.focus();
+}
+
+function closeManualTripModal() {
+    const modal = document.getElementById("manualTripModal");
+    if (!modal) return;
+    modal.classList.remove("is-open");
+    modal.setAttribute("aria-hidden", "true");
+}
+
+function updateManualTripFields() {
+    const type = document.querySelector('input[name="manualTripType"]:checked')?.value || "flight";
+    const flightFields = document.querySelector(".manual-flight-fields");
+    const trainFields = document.querySelector(".manual-train-fields");
+    if (flightFields) flightFields.hidden = type !== "flight";
+    if (trainFields) trainFields.hidden = type !== "train";
+
+    document.querySelectorAll(".manual-flight-fields input, .manual-flight-fields textarea").forEach(field => {
+        field.disabled = type !== "flight";
+    });
+    document.querySelectorAll(".manual-train-fields input").forEach(field => {
+        field.disabled = type !== "train";
+    });
+}
+
+function getInputValue(id) {
+    return document.getElementById(id)?.value.trim() || "";
+}
+
+function formatManualDate(value) {
+    if (!value) return new Date().toLocaleDateString();
+    const date = new Date(`${value}T00:00:00`);
+    return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+}
+
+function buildManualFlight() {
+    const flightNumber = normalizeFlightNumber(getInputValue("manualFlightNumber"));
+    const origin = getInputValue("manualFlightOrigin").toUpperCase();
+    const destination = getInputValue("manualFlightDestination").toUpperCase();
+    const dateValue = getInputValue("manualFlightDate");
+    const airlineName = getInputValue("manualAirline");
+    const airlineCode = flightNumber.slice(0, 2);
+    const airline = airlineDatabase[airlineCode];
+
+    return {
+        transportType: "flight",
+        flight: flightNumber || "---",
+        route: origin && destination ? `${origin} → ${destination}` : "---",
+        origin: origin || "---",
+        destination: destination || "---",
+        seat: normalizeSeatCode(getInputValue("manualFlightSeat")) || "---",
+        terminal: getInputValue("manualFlightTerminal").toUpperCase() || "---",
+        gate: getInputValue("manualFlightGate").toUpperCase() || "---",
+        flightClass: "Turista",
+        baggage: getInputValue("manualFlightBaggage") || "1 PC incluido",
+        notes: getInputValue("manualFlightNotes"),
+        airlineName: airlineName || airline?.nombre || "Desconocida",
+        aircraftName: airline?.avion || "No identificado",
+        boardingGroup: "---",
+        departureTime: "",
+        boardingTime: "",
+        date: formatManualDate(dateValue),
+        flightDate: dateValue || formatearFechaISO(new Date()),
+        rawText: "MANUAL FLIGHT ENTRY",
+        qrRaw: ""
+    };
+}
+
+function buildManualTrain() {
+    const operatorName = getInputValue("manualTrainOperator") || "Operadora no identificada";
+    const trainNumber = getInputValue("manualTrainNumber").toUpperCase() || "---";
+    const origin = getInputValue("manualTrainOrigin") || "---";
+    const destination = getInputValue("manualTrainDestination") || "---";
+    const departureTime = getInputValue("manualTrainDeparture");
+
+    return {
+        transportType: "train",
+        flight: trainNumber,
+        trainNumber,
+        route: origin !== "---" && destination !== "---" ? `${origin} → ${destination}` : "---",
+        origin,
+        destination,
+        operatorName,
+        departureTime,
+        arrivalTime: "",
+        coach: getInputValue("manualTrainCoach").toUpperCase() || "---",
+        seat: normalizeSeatCode(getInputValue("manualTrainSeat")) || "---",
+        gate: "---",
+        terminal: "---",
+        flightClass: "Standard",
+        trainClass: "Standard",
+        durationText: "---",
+        date: new Date().toLocaleDateString(),
+        flightDate: formatearFechaISO(new Date()),
+        rawText: "MANUAL TRAIN ENTRY",
+        qrRaw: ""
+    };
+}
+
+function handleManualTripSubmit(event) {
+    event.preventDefault();
+    const type = document.querySelector('input[name="manualTripType"]:checked')?.value || "flight";
+    currentFlight = type === "train" ? buildManualTrain() : buildManualFlight();
+
+    if (!currentFlight.flight || currentFlight.flight === "---") {
+        mostrarNotificacion(type === "train" ? "Introduce el número de tren" : "Introduce el número de vuelo", "warning");
+        return;
+    }
+
+    actualizarPantalla();
+    saveFlight();
+    document.getElementById("manualTripForm")?.reset();
+    updateManualTripFields();
+    closeManualTripModal();
+}
+
 // ==========================================
 // GUARDAR Y CARGAR HISTORIAL
 // ==========================================
@@ -3313,6 +3434,8 @@ function saveFlight() {
     
     // Añadir timestamp
     currentFlight.savedAt = new Date().toISOString();
+    const currentKey = getFlightUniqueKey(currentFlight);
+    history = history.filter(item => getFlightUniqueKey(item) !== currentKey);
     history.push(currentFlight);
     
     // Mantener solo últimos 50 vuelos
@@ -3326,6 +3449,18 @@ function saveFlight() {
     updateDetailedWeatherWidgets();
     
     mostrarNotificacion(`✅ ${currentFlight.transportType === "train" ? "Tren" : "Vuelo"} guardado en el Logbook`, 'success');
+}
+
+function getFlightUniqueKey(flight) {
+    return [
+        flight.transportType || "flight",
+        flight.flight || "",
+        flight.trainNumber || "",
+        flight.route || "",
+        flight.flightDate || flight.date || "",
+        flight.seat || "",
+        flight.coach || ""
+    ].join("|").toUpperCase();
 }
 
 function loadHistory() {
@@ -3590,6 +3725,33 @@ document.addEventListener('DOMContentLoaded', function() {
     const saveBtn = document.getElementById('saveFlightBtn');
     if (saveBtn) {
         saveBtn.addEventListener('click', saveFlight);
+    }
+
+    const openManualTripBtn = document.getElementById("openManualTripBtn");
+    if (openManualTripBtn) {
+        openManualTripBtn.addEventListener("click", openManualTripModal);
+    }
+
+    const closeManualTripBtn = document.getElementById("closeManualTripBtn");
+    const cancelManualTripBtn = document.getElementById("cancelManualTripBtn");
+    if (closeManualTripBtn) closeManualTripBtn.addEventListener("click", closeManualTripModal);
+    if (cancelManualTripBtn) cancelManualTripBtn.addEventListener("click", closeManualTripModal);
+
+    const manualTripModal = document.getElementById("manualTripModal");
+    if (manualTripModal) {
+        manualTripModal.addEventListener("click", event => {
+            if (event.target === manualTripModal) closeManualTripModal();
+        });
+    }
+
+    document.querySelectorAll('input[name="manualTripType"]').forEach(input => {
+        input.addEventListener("change", updateManualTripFields);
+    });
+    updateManualTripFields();
+
+    const manualTripForm = document.getElementById("manualTripForm");
+    if (manualTripForm) {
+        manualTripForm.addEventListener("submit", handleManualTripSubmit);
     }
 
     const cameraBoardingBtn = document.getElementById("cameraBoardingBtn");
