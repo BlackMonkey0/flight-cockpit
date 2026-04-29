@@ -23,11 +23,24 @@
 
 * {
   box-sizing: border-box;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+
+input,
+textarea,
+select,
+button {
+  -webkit-user-select: text;
 }
 
 html,
 body {
   min-height: 100%;
+  -webkit-text-size-adjust: 100%;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
 }
 
 body {
@@ -1182,6 +1195,7 @@ header p {
 
 button {
   appearance: none;
+  -webkit-appearance: none;
   border: 1px solid rgba(255, 189, 70, 0.34);
   border-radius: 14px;
   padding: 13px 18px;
@@ -1194,6 +1208,9 @@ button {
   cursor: pointer;
   transition: transform 0.2s ease, box-shadow 0.2s ease, filter 0.2s ease;
   box-shadow: 0 12px 24px rgba(104, 81, 28, 0.35);
+  -webkit-user-select: none;
+  user-select: none;
+  pointer-events: auto;
 }
 
 button:hover,

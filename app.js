@@ -1,6 +1,22 @@
 // ==========================================
 // CONFIGURACIÓN GLOBAL
 // ==========================================
+// Compatibilidad iOS/iPad - Asegurar que todos los elementos interactivos sean clicables
+if (/iPad|iPhone|iPod/.test(navigator.userAgent)) {
+    document.addEventListener('DOMContentLoaded', () => {
+        document.querySelectorAll('button, input, select, textarea, [role="button"]').forEach(el => {
+            if (el.onclick === null && !el.hasListener) {
+                el.style.cursor = 'pointer';
+                el.hasListener = true;
+            }
+        });
+        // Forzar que los divs con onclick sean también clicables
+        document.querySelectorAll('[onclick]').forEach(el => {
+            el.style.cursor = 'pointer';
+        });
+    });
+}
+
 let currentFlight = {};
 let map = null;
 let historyMap = null;
